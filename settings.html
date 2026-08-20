@@ -1,0 +1,27 @@
+<div class="wig-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>World Info Gallery</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+        <div class="inline-drawer-content">
+            <label class="checkbox_label">
+                <input id="wig-opt-default" type="checkbox">
+                <span>Open the World Info tab in gallery view by default</span>
+            </label>
+            <label class="checkbox_label">
+                <input id="wig-opt-tokens" type="checkbox">
+                <span>Show approximate token counts on cards</span>
+            </label>
+            <label class="checkbox_label">
+                <input id="wig-opt-derive" type="checkbox">
+                <span>Use bound character / persona avatars as default covers</span>
+            </label>
+            <div class="wig-settings-note">
+                Covers are uploaded to the server under <code>/user/images/worldinfo-gallery/</code>.
+                Folders are stored inside each lorebook as a per-entry <code>wig_folder</code> field,
+                so they survive ST updates and travel with the file on export/import.
+            </div>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,414 @@
+/* ===================== World Info Gallery ===================== */
+
+/* ---- View switching ---- */
+/* Gallery-first. ST's WI editor markup was restructured (#world_popup_header
+   and #world_popup_form no longer exist — the select row, entries list and
+   bottom button holder are direct children of #world_popup), so instead of
+   targeting IDs, hide EVERY direct child of #world_popup except our gallery.
+   Version-proof, and !important + double-ID specificity beats theme/inline
+   display overrides. The Global World Info settings live outside
+   #world_popup and stay visible. */
+#world_popup.wig-gallery-open > *:not(#wig-gallery) { display: none !important; }
+.wig-hidden { display: none !important; }
+
+/* Slim top bar for editor view (carries the back arrow) */
+#wig-editor-bar { display: flex; align-items: center; gap: 6px; padding: 0 0 6px; flex: 0 0 auto; }
+#wig-back { font-size: 0.9em; padding: 3px 8px; }
+
+#wig-open-editor,
+#wig-open-import {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+}
+#wig-open-editor i,
+#wig-open-import i { opacity: 0.85; }
+
+/* ---- Gallery layout ---- */
+#wig-gallery {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    overflow: hidden;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+#world_popup.wig-gallery-open #wig-gallery { display: flex; }
+
+#wig-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#wig-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Search + sort + counter form one non-breaking cluster. */
+#wig-controls { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 1 1 auto; }
+/* Explicit flex-basis on the select is the actual fix: basis `auto` lets a
+   width rule from ST/theme CSS inflate it to a full row. `max-content` sizes
+   it to the widest option and ignores `width` from any stylesheet. */
+#wig-search { flex: 1 1 500px; min-width: 500px; }
+#wig-sort { flex: 0 0 max-content; }
+#wig-count { font-size: 0.85em; opacity: 0.8; flex: 0 0 30px auto; white-space: nowrap; }
+#wig-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+
+.wig-chip {
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    cursor: pointer;
+    font-size: 0.85em;
+    user-select: none;
+    opacity: 0.85;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--SmartThemeBodyColor);
+}
+.wig-chip:hover { opacity: 1; }
+.wig-chip.active {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+    border-color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+#wig-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    overflow-y: auto;
+    padding: 4px 2px;
+    align-content: start;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+/* ---- Cards ---- */
+.wig-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    background: var(--SmartThemeBlurTintColor);
+    transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.wig-card:hover { transform: translateY(-2px); border-color: var(--SmartThemeQuoteColor); }
+
+.wig-cover {
+    position: relative;
+    aspect-ratio: 3 / 4;
+    width: 100%;
+    overflow: hidden;
+    background: linear-gradient(160deg,
+        hsl(var(--wig-hue, 210) 38% 32%),
+        hsl(calc(var(--wig-hue, 210) + 40) 45% 16%));
+}
+.wig-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wig-cover-icon {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.2em;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.wig-badges {
+    position: absolute;
+    left: 4px; right: 4px; bottom: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    pointer-events: none;
+}
+.wig-badge {
+    font-size: 0.65em;
+    text-transform: capitalize;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+}
+.wig-badge-persona   { background: hsla(280 60% 45% / 0.85); }
+.wig-badge-character { background: hsla(180 55% 30% / 0.85); }
+.wig-badge-chat      { background: hsla(40 85% 40% / 0.9); color: #1b1b1b; }
+.wig-badge-global    { background: hsla(140 55% 30% / 0.85); }
+.wig-badge-manual    { background: transparent; border-style: dashed; }
+
+.wig-card-menu {
+    position: absolute;
+    top: 4px; right: 4px;
+    z-index: 2;
+    width: 26px; height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 0.12s;
+    cursor: pointer;
+}
+.wig-card:hover .wig-card-menu, .wig-card-menu:focus { opacity: 1; }
+
+.wig-title {
+    font-weight: 600;
+    font-size: 0.9em;
+    padding: 6px 8px 0;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    color: var(--SmartThemeBodyColor);
+}
+.wig-meta { font-size: 0.75em; opacity: 0.7; padding: 2px 8px 8px; color: var(--SmartThemeBodyColor); }
+
+.wig-card.wig-new {
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+    border-style: dashed;
+    opacity: 0.8;
+    color: var(--SmartThemeBodyColor);
+}
+.wig-new-icon { font-size: 2em; }
+.wig-new-label { font-size: 0.85em; padding-top: 6px; }
+
+/* ---- Floating menu ---- */
+.wig-menu {
+    position: fixed;
+    z-index: 30000;
+    min-width: 200px;
+    max-width: 320px;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    box-shadow: 0 8px 30px var(--SmartThemeShadowColor);
+    padding: 4px;
+    color: var(--SmartThemeBodyColor);
+}
+.wig-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.92em;
+}
+.wig-menu-item:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 20%, transparent); }
+.wig-menu-item.disabled { opacity: 0.4; pointer-events: none; }
+.wig-menu-item.danger:hover { background: color-mix(in srgb, #d32f2f 35%, transparent); }
+.wig-menu-item i { width: 16px; text-align: center; opacity: 0.8; }
+.wig-menu-img { width: 20px; height: 20px; border-radius: 4px; object-fit: cover; flex: 0 0 auto; }
+.wig-menu-divider { height: 1px; margin: 4px 6px; background: var(--SmartThemeBorderColor); opacity: 0.5; }
+
+/* ---- Folder bar (inside the native editor) ---- */
+#wig-folder-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 4px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+#wig-folder-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+#wig-folder-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.wig-mini-btn { padding: 2px 8px; font-size: 0.85em; cursor: pointer; }
+.wig-folder-icon { opacity: 0.7; }
+/* Folder drag-to-reorder */
+.wig-bp-folder:not([data-folder="__unsorted__"]) > .wig-bp-folder-head { cursor: grab; }
+.wig-bp-folder-head:active { cursor: grabbing; }
+/* Insertion lines use box-shadow (no layout shift, unlike a border) */
+.wig-bp-folder.wig-insert-before { box-shadow: 0 -2px 0 0 var(--SmartThemeQuoteColor); }
+.wig-bp-folder.wig-insert-after { box-shadow: 0 2px 0 0 var(--SmartThemeQuoteColor); }
+.wig-bp-folder.wig-folder-dragging > .wig-bp-folder-head { opacity: 0.5; }
+
+/* Folder tag shown on each entry (via data attribute — no DOM injection) */
+.world_entry[data-wig-folder]::after {
+    content: attr(data-wig-folder);
+    margin-left: auto;
+    align-self: center;
+    font-size: 10px;
+    padding: 0 5px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    opacity: 0.7;
+    pointer-events: none;
+    white-space: nowrap;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.world_entry.wig-selected {
+    outline: 2px solid var(--SmartThemeQuoteColor);
+    outline-offset: -2px;
+}
+
+/* ---- Extension settings ---- */
+.wig-settings-note { font-size: 0.85em; opacity: 0.7; margin-top: 6px; }
+.wig-settings-note code { opacity: 1; }
+
+/* ---- Responsive (PTMT panes are resizable) ---- */
+@media (max-width: 600px) {
+    #wig-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+}
+
+
+/* ===================== Book detail popup ===================== */
+
+
+.wig-bp { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 420px; }
+.wig-bp-body { display: flex; gap: 14px; flex: 1 1 auto; min-height: 0; }
+.wig-bp-side { flex: 0 0 200px; min-width: 0; overflow-y: auto; padding-right: 2px; }
+.wig-bp-main { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+.wig-bp-head { display: flex; flex-direction: column; gap: 10px; }
+.wig-bp-cover {
+    position: relative; width: 100%; aspect-ratio: 3 / 4; flex: 0 0 auto;
+    border-radius: 8px; overflow: hidden; cursor: pointer;
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: linear-gradient(160deg,
+        hsl(var(--wig-hue, 210) 38% 32%),
+        hsl(calc(var(--wig-hue, 210) + 40) 45% 16%));
+}
+.wig-bp-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wig-bp-cover .wig-cover-icon { font-size: 2em; }
+.wig-bp-cover-cam {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 1.4em; color: #fff; background: rgba(0,0,0,0.45); opacity: 0; transition: opacity 0.15s;
+}
+.wig-bp-cover:hover .wig-bp-cover-cam { opacity: 1; }
+.wig-bp-info { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wig-bp-name-row { display: flex; align-items: center; gap: 8px; }
+.wig-bp-name { font-size: 1.1em; font-weight: 700; border: 1px solid transparent; min-width: 0; max-width: 100%; }
+.wig-bp-name:focus { border-color: var(--SmartThemeQuoteColor); outline: none; }
+.wig-bp-name-edit { opacity: 0.5; cursor: pointer; }
+.wig-bp-stats {
+    font-size: 0.9em; opacity: 0.85; display: flex; flex-direction: column;
+    align-items: flex-start; gap: 4px; color: var(--SmartThemeBodyColor);
+}
+.wig-bp-actions { display: flex; flex-direction: column; gap: 6px; }
+.wig-bp-actions .menu_button { width: 100%; justify-content: center; margin: 0; }
+.wig-bp-actions .wig-on { color: var(--SmartThemeQuoteColor); border-color: var(--SmartThemeQuoteColor); }
+.wig-bp-actions .menu_button span { margin-left: 4px; }
+
+.wig-bp-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--SmartThemeBorderColor); flex: 0 0 auto; }
+.wig-bp-tab {
+    padding: 6px 14px; cursor: pointer; border-radius: 6px 6px 0 0; opacity: 0.7;
+    color: var(--SmartThemeBodyColor);
+}
+.wig-bp-tab:hover { opacity: 1; }
+.wig-bp-tab.active { opacity: 1; border-bottom: 2px solid var(--SmartThemeQuoteColor); color: var(--SmartThemeQuoteColor); }
+.wig-bp-page { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.wig-bp-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; flex: 0 0 auto; }
+/* Filter + sort cluster — never breaks internally (same fix as #wig-sort).
+   The .wig-bp-tools prefix keeps our specificity above theme rules that
+   might target .popup selects and load after extension CSS. */
+.wig-bp-tools .wig-bp-find { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; flex: 1 1 auto; }
+.wig-bp-tools .wig-bp-find input[type="text"] { flex: 1 1 70px; min-width: 60px; }
+.wig-bp-tools .wig-bp-find select { flex: 0 0 max-content; }
+.wig-bp-btn { padding: 3px 8px; font-size: 0.9em; flex: 0 0 auto; }
+.wig-bp-btn span { margin-left: 4px; }
+
+.wig-bp-list { overflow-y: auto; flex: 1 1 auto; min-height: 0; padding-right: 2px; }
+.wig-bp-empty { opacity: 0.6; padding: 24px; text-align: center; }
+
+.wig-bp-folder { margin-bottom: 6px; }
+.wig-bp-folder-head {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer;
+    border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; user-select: none;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 70%, transparent);
+    color: var(--SmartThemeBodyColor);
+}
+.wig-bp-folder-head:hover { border-color: var(--SmartThemeQuoteColor); }
+.wig-bp-chev { transition: transform 0.15s; opacity: 0.8; }
+.wig-bp-folder.collapsed .wig-bp-chev { transform: rotate(-90deg); }
+.wig-bp-folder.collapsed .wig-bp-folder-body { display: none; }
+.wig-bp-folder-name { font-weight: 600; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wig-bp-folder-count { font-size: 0.8em; opacity: 0.75; border: 1px solid var(--SmartThemeBorderColor); border-radius: 9px; padding: 0 7px; }
+.wig-bp-kebab { padding: 2px 6px; opacity: 0.6; cursor: pointer; }
+.wig-bp-kebab:hover { opacity: 1; }
+.wig-drop-target { outline: 2px dashed var(--SmartThemeQuoteColor); outline-offset: -2px; }
+
+.wig-bp-entry { border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; margin: 4px 0; background: var(--SmartThemeBlurTintColor); }
+.wig-bp-entry.disabled > .wig-bp-entry-head { opacity: 0.45; }
+.wig-bp-entry.dragging, .wig-bp-entry.wig-dragging { opacity: 0.5; }
+.wig-bp-entry-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; color: var(--SmartThemeBodyColor); }
+.wig-bp-grip { cursor: grab; opacity: 0.4; }
+.wig-bp-entry-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.wig-bp-entry-meta { font-size: 0.75em; opacity: 0.65; white-space: nowrap; }
+
+.wig-bp-editor { border-top: 1px solid var(--SmartThemeBorderColor); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.wig-bp-editor-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.wig-bp-field { display: flex; flex-direction: column; gap: 2px; flex: 1 1 140px; min-width: 110px; font-size: 0.8em; opacity: 0.9; }
+.wig-bp-field input, .wig-bp-field select { width: 100%; }
+.wig-bp-content { width: 100%; min-height: 90px; resize: vertical; font-family: var(--monoFontFamily, monospace); font-size: 0.9em; }
+.wig-bp-check { flex-direction: row; align-items: center; gap: 6px; }
+.wig-bp-editor-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.wig-danger { color: #ff6b6b; border-color: #ff6b6b55; }
+
+.wig-bp-section { border: 1px solid var(--SmartThemeBorderColor); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.wig-bp-section-title { display: flex; gap: 8px; align-items: center; font-weight: 700; margin-bottom: 8px; color: var(--SmartThemeBodyColor); }
+.wig-bp-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 4px 0; color: var(--SmartThemeBodyColor); }
+.wig-bp-setting-row span { min-width: 0; }
+.wig-bp-note { font-size: 0.85em; opacity: 0.75; margin: 6px 0; color: var(--SmartThemeBodyColor); }
+.wig-bp-section select { max-width: 100%; }
+
+/* Native-editor entry flash (jump from popup) */
+.world_entry.wig-flash { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: -2px; transition: outline 0.4s; }
+
+/* Entry collapse on second click (editor keeps unsaved input while hidden) */
+.wig-bp-entry:not(.open) > .wig-bp-editor { display: none; }
+
+/* Collapsible editor sections */
+.wig-bp-sec { border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; }
+.wig-bp-sec-head {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    cursor: pointer; user-select: none; color: var(--SmartThemeBodyColor);
+}
+.wig-bp-sec-head > span { flex: 1 1 auto; font-weight: 600; font-size: 0.9em; }
+.wig-bp-sec-chev { transition: transform 0.15s; opacity: 0.6; font-size: 0.8em; }
+.wig-bp-sec.closed .wig-bp-sec-chev { transform: rotate(-90deg); }
+.wig-bp-sec.closed .wig-bp-sec-body { display: none; }
+.wig-bp-sec-body {
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+}
+.wig-bp-checkrow { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
+.wig-bp-check { display: inline-flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+
+/* Sidebar becomes a horizontal header strip in narrow popups */
+@media (max-width: 720px) {
+    .wig-bp-body { flex-direction: column; }
+    .wig-bp-side { flex: 0 0 auto; overflow: visible; }
+    .wig-bp-head { flex-direction: row; align-items: center; }
+    .wig-bp-cover { width: 84px; }
+    .wig-bp-info { flex: 1 1 auto; }
+    .wig-bp-stats { flex-direction: row; align-items: center; flex-wrap: wrap; }
+    .wig-bp-actions { flex-direction: row; flex-wrap: wrap; }
+    .wig-bp-actions .menu_button { width: auto; }
+}
+
+/* Live token counter under the entry content textarea */
+.wig-bp-content-wrap { display: flex; flex-direction: column; gap: 2px; }
+.wig-bp-token-live {
+    font-size: 0.75em; opacity: 0.6; text-align: right; min-height: 1.2em;
+    color: var(--SmartThemeBodyColor); user-select: none;
+}
+
+/* Unsaved-draft marker on entry rows (warned about on popup close) */
+.wig-bp-entry[data-wig-draft] > .wig-bp-entry-head .wig-bp-entry-title::after {
+    content: '●';
+    color: var(--SmartThemeQuoteColor);
+    font-size: 0.6em;
+    vertical-align: 0.7em;
+    margin-left: 3px;
+}
