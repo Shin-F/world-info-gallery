@@ -18,12 +18,17 @@ Click any card to open the detail popup:
 - **Entries tab** — collapsible folders with drag & drop, plus the full entry editor
 - **Settings tab** — manage every binding (persona / character / chat / global), manual labels, cover image, Lorebook Manager import, and deletion
 
+![Detail popup](screenshots/popup-entries.png)
+![Popup settings](screenshots/popup-settings.png)
+
 ### 📁 Entry folders
 - Group entries into collapsible, reorderable folders
 - Drag entries onto folder headers to move them; drag folder headers to reorder (top half of the target = above, bottom half = below)
 - **Folders are stored inside the lorebook file itself** (`entry.extensions.lorebook_folder`) — they survive exports, imports, and travel with the book anywhere
 - **Lorebook Manager compatible**: existing Lorebook Manager folders import automatically on first open, and folder changes are mirrored back so both extensions agree
 - A folder filter bar is also injected into the native editor
+
+![Folders](screenshots/entryfolders.gif)
 
 ### 🔗 Classification & bindings
 Badges are derived from *live* bindings, not just labels:
