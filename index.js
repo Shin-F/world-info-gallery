@@ -5,8 +5,19 @@
 // (all UI is injected inside #world_popup or shown in ST Popups).
 // =====================================================================
 
-const MODULE_NAME = 'worldinfo-gallery';
-const EXT_PATH = `third-party/${MODULE_NAME}`;
+const MODULE_NAME = 'worldinfo-gallery';   // unchanged — keep reading, this matters
+// The install folder is whatever ST's installer cloned the repo as
+// (third-party/<repo-name>) — it needn't match anything hardcoded. Detect it
+// from this script's own URL so GitHub installs, manual installs, and local
+// dev folders all work. (Extension scripts are ES modules, so import.meta
+// is available; the unanchored regex tolerates reverse-proxy subpaths.)
+const EXT_PATH = (() => {
+    try {
+        const m = new URL(import.meta.url).pathname.match(/\/scripts\/extensions\/(third-party\/[^/]+)\//);
+        if (m) return m[1];
+    } catch { /* not a module / unexpected layout — fall back */ }
+    return `third-party/${MODULE_NAME}`;
+})();
 const SETTINGS_KEY = 'WorldInfoGallery';
 const LM_SETTINGS_KEY = 'lorebookFolders';      // Lorebook Manager / WI Drawer
 const LM_FOLDER_FIELD = 'lorebook_folder';      // stored under entry.extensions
@@ -2863,7 +2874,14 @@ function injectFolderBar() {
 
 // ---------------------------------------------------------- settings panel
 async function initSettingsPanel() {
-    const html = await ctx.renderExtensionTemplateAsync(EXT_PATH, 'settings');
+    let html;
+    try {
+        html = await ctx.renderExtensionTemplateAsync(EXT_PATH, 'settings');
+    } catch (e) {
+        // A missing/broken template must never kill the whole extension
+        console.warn(`[${MODULE_NAME}] Settings template unavailable — settings panel skipped.`, e);
+        return;
+    }
     jq('#extensions_settings2').append(html);
     const wire = (id, key) => {
         const el = document.getElementById(id);
