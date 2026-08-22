@@ -39,6 +39,7 @@ const DEFAULTS = Object.freeze({
     folderOrder: {},       // worldName -> [folderName, ...]
     collapsedFolders: {},  // worldName -> { folderName: true }
     lmImported: {},        // worldName -> true (auto Lorebook Manager import done)
+	placeholderCover: 'letter',  // no-image covers: 'letter' | 'initials' | 'icon'
 });
 
 const FILTERS = [
@@ -134,6 +135,40 @@ function hueFromString(str) {
     let h = 0;
     for (let i = 0; i < String(str).length; i++) h = (h * 31 + String(str).charCodeAt(i)) | 0;
     return Math.abs(h) % 360;
+}
+
+// First meaningful character of a word (skips punctuation/brackets/emoji),
+// Unicode-aware via code-point iteration.
+function firstLetterOf(word) {
+    for (const ch of String(word)) {
+        if (/[\p{L}\p{N}]/u.test(ch)) return ch.toUpperCase();
+    }
+    return null;
+}
+
+// Placeholder text for cover-less books: first letter, or word initials
+// (capped at 3). Null → fall back to the generic book icon.
+function placeholderTextFor(name) {
+    const style = getSettings().placeholderCover;
+    if (style === 'icon') return null;
+    const words = String(name ?? '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return null;
+    if (style === 'initials') {
+        const initials = words.slice(0, 3).map(firstLetterOf).filter(Boolean).join('');
+        if (initials) return initials;
+    }
+    return firstLetterOf(words[0]);
+}
+
+// Placeholder cover: big monogram on the name-derived gradient
+function addCoverPlaceholder(cover, name) {
+    const letter = placeholderTextFor(name);
+    if (!letter) { addCoverIcon(cover); return; }
+    const s = document.createElement('span');
+    s.className = 'wig-cover-letter';
+    s.dataset.chars = String([...letter].length);
+    s.textContent = letter;
+    cover.appendChild(s);
 }
 
 function toast(type, msg) {
@@ -1033,9 +1068,9 @@ function buildCard(c) {
         const im = document.createElement('img');
         im.loading = 'lazy';
         im.src = cov.url;
-        im.onerror = () => { im.remove(); addCoverIcon(cover); };
+        im.onerror = () => { im.remove(); addCoverPlaceholder(cover, c.name); };
         cover.appendChild(im);
-    } else addCoverIcon(cover);
+    } else addCoverPlaceholder(cover, c.name);
 
     const badges = document.createElement('div');
     badges.className = 'wig-badges';
@@ -1366,9 +1401,9 @@ function renderPopupHead() {
     if (cov) {
         const im = document.createElement('img');
         im.src = cov.url;
-        im.onerror = () => { im.remove(); addCoverIcon(cover); };
+        im.onerror = () => { im.remove(); addCoverPlaceholder(cover, name); };
         cover.appendChild(im);
-    } else addCoverIcon(cover);
+    } else addCoverPlaceholder(cover, name);
     const cam = document.createElement('i');
     cam.className = 'fa-solid fa-camera wig-bp-cover-cam';
     cam.title = 'Change cover';
@@ -1935,6 +1970,91 @@ function restoreDraft(ed, v) {
     ed.querySelector('[data-wig-field="content"]')?.dispatchEvent(new Event('input'));
 }
 
+// ---------------------------------------------------------- character filter
+// Two storage generations:
+//  - Release (current): { isExclude, names: [extensionless avatar filenames],
+//    tags: [tag ID strings] } — verified against world-info.js.
+//  - Staging/future (PR #5666): flat array of { type, name, state } items
+//    (character/tag/persona, oneOf/required/excluded); ST migrates legacy
+//    data on load. We read/write whichever generation we find, and the UI
+//    upgrades itself (three-state cycle + personas) when the build has it.
+const CF_STATES_ARRAY = ['oneOf', 'required', 'excluded'];
+const CF_STATES_LEGACY = ['oneOf', 'excluded']; // legacy format can't express AND
+
+let cfApiCache; // undefined = unresolved, false = legacy build, true = array-model build
+async function cfSupportsArrayModel() {
+    if (cfApiCache === undefined) {
+        try {
+            const wi = await import('../../../world-info.js');
+            cfApiCache = Boolean(wi?.CHARACTER_FILTER_TYPES);
+        } catch { cfApiCache = false; }
+    }
+    return cfApiCache;
+}
+
+let tagsCache; // undefined = unresolved, null = unavailable, module = loaded
+async function loadTags() {
+    if (tagsCache === undefined) {
+        try {
+            const t = await import('../../../tags.js');
+            tagsCache = Array.isArray(t?.tags) ? t : null;
+        } catch { tagsCache = null; }
+    }
+    return tagsCache;
+}
+
+// Native convention: characters are stored by avatar filename w/o extension
+const charKeyOf = (ch) => String(ch?.avatar ?? '').replace(/\.[^.]+$/, '');
+
+function readCharacterFilter(entry) {
+    const cf = entry?.characterFilter;
+    const norm = { format: null, characters: new Map(), tags: new Map(), personas: new Map() };
+    if (Array.isArray(cf)) {
+        norm.format = 'array';
+        for (const it of cf) {
+            if (!it?.type || it?.name === undefined) continue;
+            const state = CF_STATES_ARRAY.includes(it.state) ? it.state : 'oneOf';
+            const map = it.type === 'character' ? norm.characters
+                : it.type === 'tag' ? norm.tags
+                : it.type === 'persona' ? norm.personas : null;
+            if (map) map.set(String(it.name), state);
+        }
+    } else if (cf && typeof cf === 'object') {
+        norm.format = 'object';
+        const state = cf.isExclude ? 'excluded' : 'oneOf';
+        for (const n of cf.names ?? []) norm.characters.set(String(n), state);
+        for (const t of cf.tags ?? []) norm.tags.set(String(t), state);
+    }
+    return norm;
+}
+
+function writeCharacterFilter(format, norm) {
+    if (format === 'array') {
+        const items = [];
+        for (const [name, state] of norm.characters) items.push({ type: 'character', name, state });
+        for (const [name, state] of norm.tags) items.push({ type: 'tag', name, state });
+        for (const [name, state] of norm.personas) items.push({ type: 'persona', name, state });
+        return items;
+    }
+    // Legacy object format: cannot express per-item AND or personas. If any
+    // item is 'excluded', the filter flips to exclude-mode keeping only those.
+    const chars = [...norm.characters], tags = [...norm.tags];
+    if (norm.personas.size) console.warn(`[${MODULE_NAME}] persona filter items dropped: this build stores the legacy characterFilter format`);
+    const excluded = [...chars, ...tags].some(([, s]) => s === 'excluded');
+    return {
+        isExclude: excluded,
+        names: chars.filter(([, s]) => !excluded || s === 'excluded').map(([n]) => n),
+        tags: tags.filter(([, s]) => !excluded || s === 'excluded').map(([n]) => n),
+    };
+}
+
+function mkChipNote(text) {
+    const s = document.createElement('span');
+    s.className = 'wig-bp-note';
+    s.textContent = text;
+    return s;
+}
+
 function buildEntryEditor(book, e) {
     const ed = document.createElement('div');
     ed.className = 'wig-bp-editor';
@@ -2107,29 +2227,152 @@ function buildEntryEditor(book, e) {
     mRow2.append(fld('Automation ID', automationId));
     secMisc.body.append(mRow1, mRow2);
 
-    // ---- Character filter (names round-trip as display names; tags preserved)
-    const charFilter = e.characterFilter;
-    const nameFor = (file) => (ctx.characters ?? []).find((c) => c.avatar === file)?.name ?? file;
-    const filterNames = document.createElement('input');
-    filterNames.type = 'text';
-    filterNames.placeholder = 'Character names, comma separated';
-    filterNames.value = (charFilter?.names ?? []).map(nameFor).join(', ');
-    const filterExclude = document.createElement('input');
-    filterExclude.type = 'checkbox';
-    filterExclude.checked = !!charFilter?.isExclude;
+    // ---- Character filter (native parity: character + tag chips, plus persona
+    // chips and three-state cycling on builds with the array model)
+    const cfNorm = readCharacterFilter(e);
+    const cfFormat = cfNorm.format ?? (cfApiCache === true ? 'array' : 'object');
+    const cfStates = cfFormat === 'array' ? CF_STATES_ARRAY : CF_STATES_LEGACY;
+    const cfInput = document.createElement('input');
+    cfInput.type = 'hidden';
+    cfInput.dataset.wigField = 'characterFilter';
+
     const secFilter = editorSection('Character filter', 'fa-user-check');
-    const fRow1 = document.createElement('div');
-    fRow1.className = 'wig-bp-editor-row';
-    fRow1.append(fld('Characters', filterNames));
-    const fRow2 = document.createElement('div');
-    fRow2.className = 'wig-bp-editor-row wig-bp-checkrow';
-    const tagsNote = document.createElement('span');
-    tagsNote.className = 'wig-bp-note';
-    tagsNote.textContent = charFilter?.tags?.length
-        ? `${charFilter.tags.length} tag filter(s) preserved (edit tags in the native editor).`
-        : 'Tag filters can be set in the native editor.';
-    fRow2.append(wrapCheck(filterExclude, 'Exclude (invert filter)'), tagsNote);
-    secFilter.body.append(fRow1, fRow2);
+    const cfLegend = document.createElement('div');
+    cfLegend.className = 'wig-bp-note';
+    cfLegend.textContent = cfFormat === 'array'
+        ? 'Click a chip to cycle: ○ one of (OR) → ✓ required (AND) → ✗ excluded (NOT) → off.'
+        : 'Click a chip to cycle: include → exclude → off.';
+    const lblChars = document.createElement('div');
+    lblChars.className = 'wig-bp-chip-label';
+    const lblTags = document.createElement('div');
+    lblTags.className = 'wig-bp-chip-label';
+    const lblPers = document.createElement('div');
+    lblPers.className = 'wig-bp-chip-label';
+    const charSearch = document.createElement('input');
+    charSearch.type = 'text';
+    charSearch.className = 'text_pole wig-bp-filter-search';
+    charSearch.placeholder = 'Find character…';
+    const charChips = document.createElement('div');
+    charChips.className = 'wig-bp-chipbox';
+    const tagChips = document.createElement('div');
+    tagChips.className = 'wig-bp-chipbox';
+    const persChips = document.createElement('div');
+    persChips.className = 'wig-bp-chipbox';
+
+    function cfSyncInput() {
+        cfInput.value = JSON.stringify({
+            format: cfFormat,
+            characters: [...cfNorm.characters],
+            tags: [...cfNorm.tags],
+            personas: [...cfNorm.personas],
+        });
+    }
+    function cfSerialize() {
+        cfSyncInput();
+        cfInput.dispatchEvent(new Event('input', { bubbles: true })); // mark draft dirty
+        syncCfLabels();
+    }
+    function cfApplyInput() {
+        try {
+            const v = JSON.parse(cfInput.value || 'null');
+            if (v && typeof v === 'object') {
+                cfNorm.characters = new Map(v.characters ?? []);
+                cfNorm.tags = new Map(v.tags ?? []);
+                cfNorm.personas = new Map(v.personas ?? []);
+            }
+        } catch { /* corrupted draft value */ }
+    }
+    function syncCfLabels() {
+        lblChars.textContent = cfNorm.characters.size ? `Characters (${cfNorm.characters.size})` : 'Characters';
+        lblTags.textContent = cfNorm.tags.size ? `Tags (${cfNorm.tags.size})` : 'Tags';
+        lblPers.textContent = cfNorm.personas.size ? `Personas (${cfNorm.personas.size})` : 'Personas';
+    }
+    const cfCycle = (map, key, chip) => {
+        const idx = cfStates.indexOf(map.get(key)); // -1 = off
+        const next = idx === -1 ? cfStates[0] : (idx + 1 < cfStates.length ? cfStates[idx + 1] : undefined);
+        if (next === undefined) map.delete(key); else map.set(key, next);
+        chip.dataset.cfState = next ?? '';
+        cfSerialize();
+    };
+    const cfChip = (label, map, key, { img, tag, title } = {}) => {
+        const chip = document.createElement('div');
+        chip.className = 'wig-bp-chip-toggle';
+        chip.dataset.cfState = map.get(key) ?? '';
+        chip.title = title ?? label;
+        if (img) {
+            const im = document.createElement('img');
+            im.src = img;
+            im.onerror = () => im.remove();
+            chip.appendChild(im);
+        }
+        const sp = document.createElement('span');
+        sp.textContent = label;
+        chip.appendChild(sp);
+        if (tag?.color) chip.style.backgroundColor = tag.color;   // native tag colors
+        if (tag?.color2) chip.style.color = tag.color2;
+        chip.addEventListener('click', () => cfCycle(map, key, chip));
+        return chip;
+    };
+
+    function renderCharChips() {
+        charChips.replaceChildren();
+        const all = ctx.characters ?? [];
+        const q = charSearch.value.trim().toLowerCase();
+        const shown = all.filter((c) => !q || String(c.name).toLowerCase().includes(q));
+        if (!all.length) charChips.appendChild(mkChipNote('No characters available.'));
+        else if (!shown.length) charChips.appendChild(mkChipNote('No characters match.'));
+        for (const ch of shown) {
+            // Stored identifiers are extensionless avatar filenames; match either
+            // convention (and display names) for robustness, write the native one
+            const key = [charKeyOf(ch), ch.avatar, ch.name].find((k) => cfNorm.characters.has(k)) ?? charKeyOf(ch);
+            charChips.appendChild(cfChip(ch.name, cfNorm.characters, key, { img: safeThumb('avatar', ch.avatar) }));
+        }
+        // Ghost chips: selected items that no longer resolve to any character
+        for (const [key] of cfNorm.characters) {
+            if (!all.some((c) => charKeyOf(c) === key || c.avatar === key || c.name === key)) {
+                charChips.appendChild(cfChip(`⚠ ${key}`, cfNorm.characters, key, { title: `Unresolved: ${key}` }));
+            }
+        }
+        syncCfLabels();
+    }
+
+    async function renderTagChips() {
+        tagChips.replaceChildren();
+        let all = Array.isArray(ctx.tags) ? ctx.tags : null;      // primary: context registry
+        if (!all) all = (await loadTags())?.tags ?? null;          // fallback: tags.js import
+        if (!all) { tagChips.appendChild(mkChipNote('Tags unavailable on this build.')); return; }
+        const sorted = [...all].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+        if (!sorted.length) { tagChips.appendChild(mkChipNote('No tags defined yet — create them in the Tags manager.')); return; }
+        for (const tag of sorted) {
+            const key = [String(tag.id), String(tag.name)].find((k) => cfNorm.tags.has(k)) ?? String(tag.id);
+            tagChips.appendChild(cfChip(tag.name, cfNorm.tags, key, { tag, title: `Tag: ${tag.name}` }));
+        }
+        for (const [key] of cfNorm.tags) {
+            if (!sorted.some((t) => String(t.id) === key || String(t.name) === key)) {
+                tagChips.appendChild(cfChip(`⚠ ${key}`, cfNorm.tags, key, { title: `Unresolved tag: ${key}` }));
+            }
+        }
+        syncCfLabels();
+    }
+
+    function renderPersonaChips() {
+        persChips.replaceChildren();
+        const personas = Object.entries(ctx.powerUserSettings?.personas ?? {});
+        if (!personas.length) { persChips.appendChild(mkChipNote('No personas defined.')); return; }
+        for (const [pKey, pName] of personas) {
+            const key = [pKey, pKey.replace(/\.[^.]+$/, ''), pName].find((k) => cfNorm.personas.has(k)) ?? pKey;
+            persChips.appendChild(cfChip(pName || pKey, cfNorm.personas, key, { img: safeThumb('persona', pKey), title: `Persona: ${pName || pKey}` }));
+        }
+        syncCfLabels();
+    }
+
+    charSearch.addEventListener('input', renderCharChips);
+    renderCharChips();
+    renderTagChips();
+    if (cfFormat === 'array') renderPersonaChips();
+    cfSyncInput();
+    secFilter.body.append(cfLegend, lblChars, charSearch, charChips, lblTags, tagChips, cfInput);
+    if (cfFormat === 'array') secFilter.body.append(lblPers, persChips);
 
     // ---- Buttons
     const btns = document.createElement('div');
@@ -2167,12 +2410,10 @@ function buildEntryEditor(book, e) {
         entry.delayUntilRecursion = delayRec.checked;
         entry.addMemo = addMemo.checked;
         entry.automationId = automationId.value.trim();
-        // Character filter: display names -> avatar filenames, tags preserved
-        const names = parseKeys(filterNames.value)
-            .map((n) => (ctx.characters ?? []).find((c) => c.name.toLowerCase() === n.toLowerCase())?.avatar ?? null)
-            .filter(Boolean);
-        if (names.length || filterExclude.checked || entry.characterFilter?.tags?.length) {
-            entry.characterFilter = { isExclude: filterExclude.checked, names, tags: entry.characterFilter?.tags ?? [] };
+        // Character filter: chip selections (native identifier conventions)
+        cfApplyInput();
+        if (cfNorm.characters.size || cfNorm.tags.size || cfNorm.personas.size) {
+            entry.characterFilter = writeCharacterFilter(cfFormat, cfNorm);
         } else {
             delete entry.characterFilter;
         }
@@ -2213,7 +2454,7 @@ function buildEntryEditor(book, e) {
         [sticky, 'sticky'], [cooldown, 'cooldown'], [delay, 'delay'],
         [preventRec, 'preventRecursion'], [excludeRec, 'excludeRecursion'], [delayRec, 'delayUntilRecursion'],
         [addMemo, 'addMemo'], [automationId, 'automationId'],
-        [filterNames, 'filterNames'], [filterExclude, 'filterExclude'],
+        [cfInput, 'characterFilter'],
         ...sourceChecks.map((sc) => [sc.input, 'src_' + sc.field]),
     ]) el.dataset.wigField = field;
 
@@ -2228,7 +2469,13 @@ function buildEntryEditor(book, e) {
     ed.addEventListener('change', markDraft);
 
     // Re-apply a pending draft (editor was rebuilt under the user)
-    if (state.bp?.stash?.has(e.uid)) restoreDraft(ed, state.bp.stash.get(e.uid));
+    if (state.bp?.stash?.has(e.uid)) {
+        restoreDraft(ed, state.bp.stash.get(e.uid));
+        cfApplyInput();                    // chips read the restored hidden input
+        renderCharChips();
+        renderTagChips();
+        if (cfFormat === 'array') renderPersonaChips();
+    }
     return ed;
 }
 
@@ -2892,6 +3139,16 @@ async function initSettingsPanel() {
     wire('wig-opt-default', 'galleryDefault');
     wire('wig-opt-tokens', 'showTokens');
     wire('wig-opt-derive', 'deriveCovers');
+	const ph = document.getElementById('wig-opt-placeholder');
+    if (ph) {
+        ph.value = getSettings().placeholderCover ?? 'letter';
+        ph.addEventListener('change', () => {
+            getSettings().placeholderCover = ph.value;
+            saveSettings();
+            renderGallery();
+            if (state.bp) renderPopupHead();
+        });
+    }
 }
 
 // ---------------------------------------------------------- init
@@ -2906,6 +3163,8 @@ async function init() {
     injectFolderBar();
     wireGlobalListeners();
     state.lastNames = (await ctx.getWorldInfoNames()) ?? [];
+	cfSupportsArrayModel(); // settle character-filter capability before first editor opens
+    loadTags();             // prewarm the tags registry
     setView(getSettings().galleryDefault ? 'gallery' : 'editor');
     console.debug(`[${MODULE_NAME}] initialized`);
 }
