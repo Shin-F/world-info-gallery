@@ -11,6 +11,7 @@ A gallery-first browser and editor for SillyTavern **World Info / Lorebooks**. T
 - Custom cover images — or covers derived automatically from the bound character's / persona's avatar
 - Filter chips (**All / Persona / Character / Chat / Global / Unbound**), text search, and sorting by name, entries, or tokens
 - Import lorebook files and open the native editor straight from the toolbar
+- Placeholder covers: first-letter or word-initial monograms for books without images.
 
 ### 📖 Book detail popup
 Click any card to open the detail popup:
@@ -109,7 +110,6 @@ All API calls go to your own SillyTavern server — the extension makes no exter
 ## Known limitations
 
 - Books bound to **other** chats can't be detected client-side (that binding lives inside each chat's file) — they'll show as *Unbound* until given a manual label
-- Tag-based character filters are preserved but can only be edited in the native editor (name filters are editable in the popup)
 - HTML5 drag & drop doesn't fire on touch devices — use the folder menu's *Move up / Move down* instead
 - Editing the same entry simultaneously in the popup and the native editor is last-write-wins (unsaved drafts are marked with a dot)
 - With remote tokenizers, the first token-counting pass queues one request per entry; results are cached afterward
