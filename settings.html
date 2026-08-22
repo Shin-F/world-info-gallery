@@ -17,6 +17,14 @@
                 <input id="wig-opt-derive" type="checkbox">
                 <span>Use bound character / persona avatars as default covers</span>
             </label>
+            <label class="wig-settings-row">
+                <span>Placeholder covers (books without an image):</span>
+                <select id="wig-opt-placeholder" class="text_pole">
+                    <option value="letter">First letter</option>
+                    <option value="initials">Word initials</option>
+                    <option value="icon">Book icon</option>
+                </select>
+            </label>
             <div class="wig-settings-note">
                 Covers are uploaded to the server under <code>/user/images/worldinfo-gallery/</code>.
                 Folders are stored inside each lorebook as a per-entry <code>wig_folder</code> field,
