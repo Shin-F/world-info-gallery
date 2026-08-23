@@ -2152,9 +2152,49 @@ function buildEntryRow(book, e) {
     return row;
 }
 
+// ------------------------------- cross-book send (move / copy)
+async function sendToBookMenu(fromBook, uids, anchor) {
+    const names = ((await ctx.getWorldInfoNames()) ?? []).filter((n) => n !== fromBook);
+    if (!names.length) { toast('warning', 'No other lorebooks to send to.'); return; }
+    const what = uids.length === 1 ? 'entry' : `${uids.length} entries`;
+    const items = [{ type: 'search', placeholder: 'Filter books…' }];
+    for (const n of names) {
+        items.push({
+            icon: 'fa-book',
+            label: n,
+            action: () => showMenu([
+                { icon: 'fa-right-left', label: `Move ${what} to "${n}"`, action: () => doTransfer(fromBook, uids, n, true) },
+                { icon: 'fa-clone', label: `Copy ${what} to "${n}"`, action: () => doTransfer(fromBook, uids, n, false) },
+            ], anchor),
+        });
+    }
+    showMenu(items, anchor);
+}
+
+async function doTransfer(fromBook, uids, toBook, move) {
+    let n = 0;
+    try {
+        n = await transferEntries(fromBook, uids, toBook, move);
+    } catch (e) {
+        console.error(`[${MODULE_NAME}] transfer failed`, e);
+        toast('error', 'Transfer failed.');
+        return;
+    }
+    if (!n) { toast('warning', 'Nothing was transferred.'); return; }
+    toast('success', `${move ? 'Moved' : 'Copied'} ${n} ${n === 1 ? 'entry' : 'entries'} to "${toBook}".`);
+    enterSelectMode(false);
+    renderGallery();
+    if (state.bp?.name === fromBook || state.bp?.name === toBook) await state.bp.rerender?.();
+    if (state.view === 'editor') { refreshFolderBar(); applyFolderFilter(); }
+}
+
 function entryMenu(book, e, anchor) {
     showMenu([
-        { icon: 'fa-folder', label: 'Move to folder…', action: (a) => folderPickerPopup(book, [e.uid], a) },
+        // Sub-menus anchor to the kebab (stable), never the clicked row —
+        // the row's menu is removed from the DOM before this action runs,
+        // and a detached element's rect is all zeros.
+        { icon: 'fa-folder', label: 'Move to folder…', action: () => folderPickerPopup(book, [e.uid], anchor) },
+        { icon: 'fa-book', label: 'Send to another book…', action: () => sendToBookMenu(book, [e.uid], anchor) },
         { icon: 'fa-clone', label: 'Duplicate', action: () => duplicateEntry(book, e.uid) },
         { icon: 'fa-up-right-from-square', label: 'Open in native editor', action: () => openNativeAt(book, e.uid) },
         { type: 'divider' },
@@ -2798,6 +2838,73 @@ async function duplicateEntry(book, uid) {
     toast('success', 'Entry duplicated.');
 }
 
+// Next free uid in a book — ST's own generator when available, identical
+// manual math otherwise. Safe to call repeatedly while appending: each call
+// sees the entries added so far, so batch transfers get sequential uids.
+function nextUidFor(book) {
+    try {
+        if (typeof wiModule?.getNewUid === 'function') return wiModule.getNewUid(book);
+        if (typeof ctx.getNewUid === 'function') return ctx.getNewUid(book);
+    } catch { /* fall through */ }
+    const uids = Object.values(book?.entries ?? {}).map((e) => Number(e.uid)).filter(Number.isFinite);
+    return (uids.length ? Math.max(...uids) : -1) + 1;
+}
+
+// Cross-book move/copy. Semantics match ST's native transfer (PRs #3768 +
+// #4335): the entry is cloned verbatim — including extensions.lorebook_folder,
+// so folder groupings travel with it and materialize in the target book —
+// gets a fresh uid (uids are unique per lorebook, so they can't be kept),
+// and lands at the end of the target (displayIndex). The original is
+// deleted only on move. Save order is target first: if a move ever failed
+// midway, the entry would exist in both books (recoverable) rather than
+// neither (data loss).
+async function transferEntries(fromBook, uidsIn, toBook, move) {
+    if (!fromBook || !toBook || fromBook === toBook) return 0;
+    const uids = [...new Set(uidsIn ?? [])];
+    if (!uids.length) return 0;
+    await loadWiModule();
+    const src = await ctx.loadWorldInfo(fromBook);
+    const dst = await ctx.loadWorldInfo(toBook);
+    if (!src?.entries || !dst?.entries) return 0;
+
+    let display = Object.keys(dst.entries).length;
+    const placed = []; // { uid, folder } in the target
+    for (const uid of uids) {
+        const e = src.entries[uid];
+        if (!e) continue;
+        const clone = structuredClone(e);
+        clone.uid = nextUidFor(dst);
+        clone.displayIndex = display++;
+        dst.entries[clone.uid] = clone;
+        if (move) delete src.entries[uid];
+        placed.push({ uid: clone.uid, folder: folderOf(clone) });
+    }
+    if (!placed.length) return 0;
+
+    await ctx.saveWorldInfo(toBook, dst);
+    if (move) await ctx.saveWorldInfo(fromBook, src);
+
+    invalidateBooks(fromBook);
+    invalidateBooks(toBook);
+    tokenCounts.delete(fromBook); // gallery recounts both via signature check
+    tokenCounts.delete(toBook);
+
+    // Lorebook Manager: moved uids leave the source's map; the new uids
+    // register at the target with their folders. Copy leaves source alone.
+    if (move) {
+        const lmSrc = lmWorldState(fromBook);
+        if (lmSrc?.entries) {
+            let touched = false;
+            for (const uid of uids) {
+                if (String(uid) in lmSrc.entries) { delete lmSrc.entries[String(uid)]; touched = true; }
+            }
+            if (touched) saveSettings();
+        }
+    }
+    for (const p of placed) mirrorToLM(toBook, [p.uid], p.folder);
+    return placed.length;
+}
+
 async function deleteEntry(book, uid) {
     const data = await ctx.loadWorldInfo(book);
     const entry = data?.entries?.[uid];
@@ -3164,6 +3271,12 @@ async function folderPickerNative(book, uids) {
             saveSettings();
             await moveEntries(book, uids, f);
         },
+    });
+    items.push({ type: 'divider' });
+    items.push({
+        icon: 'fa-book',
+        label: 'Send to another book…',
+        action: () => sendToBookMenu(book, uids, document.getElementById('wig-folder-actions')),
     });
     items.push({ icon: 'fa-xmark', label: 'Remove from folder', danger: true, action: () => moveEntries(book, uids, null) });
     showMenu(items, document.getElementById('wig-folder-actions'));
