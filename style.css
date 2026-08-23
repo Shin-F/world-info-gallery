@@ -493,3 +493,8 @@
    above covers this, but keep an explicit guard so a future selector edit
    can't regress it silently. */
 #world_popup.wig-gallery-open > #wig-editor-bar { display: none; }
+
+/* ---- Gallery render stability ----
+   Token counts fill in asynchronously ('…' → '1.2k'); pin the span width so
+   arriving numbers don't reflow cards mid-scroll. */
+.wig-meta span[data-wig-token] { display: inline-block; min-width: 4.5em; }
