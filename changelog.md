@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.2] - 2026-08-23
+### Fixed
+- Clicking anything in a context menu no longer closes the World Info panel. SillyTavern dismisses drawers on clicks outside them, and the check runs on DOM containment against a whitelist of selectors (`#world_popup`, `.popup`, `.ui-widget`, …) — the extension's menus were mounted at the document level, matching nothing, so every menu click counted as "outside" and dismissed the drawer behind it. Menus anchored inside the panel now mount inside it, making them part of the panel for that check. (Invisible to ProbablyTooManyTabs users, whose tabs never auto-close; most visible when linking several chat lorebooks in a row.)
+
+## [1.2.1] - 2026-08-23
+### Fixed
+- Linking a chat lorebook from the card menu no longer closes the gallery. SillyTavern fires synthetic change events on the World Info editor's book selector during programmatic refreshes (including the editor refresh that follows a chat-binding save), and the extension was treating those as user selections — switching the view to the native editor. View switching now reacts only to real user interaction with the selector.
+- The Settings-tab chat Link/Unlink button works — its toggle argument was inverted (it invoked the remove path when linking, and vice versa), so it silently did nothing. Present since the first release; only noticeable once chat bindings became usable.
+- Binding rows in the popup's Settings tab refresh immediately after any binding action, instead of showing stale state until reopened.
+
 ## [1.2.0] - 2026-08-23
 
 *(This release bundles the previously unpublished 1.1.1 – 1.1.3, which resolve the binding-detection reports from the issue tracker.)*
