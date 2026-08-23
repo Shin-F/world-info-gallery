@@ -84,8 +84,7 @@ function forgetChatBindings(name) {
     delete getSettings().chatBindings[name];
     saveSettings();
     noteChatBindings(); // a live current-chat link immediately re-registers
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    refreshPopupBindingUi(name);
     toast('info', `Forgot ${n} remembered chat link${n === 1 ? '' : 's'}.`);
 }
 
@@ -678,7 +677,9 @@ async function openBook(name) {
     const names = await ctx.getWorldInfoNames();
     const idx = names.indexOf(name);
     if (idx === -1) { toast('warning', `Lorebook "${name}" no longer exists.`); return; }
-    jq('#world_editor_select').val(String(idx)).trigger('change');
+    jq('#world_editor_select').val(String(idx));
+    setView('editor'); // explicit — the synthetic change below no longer flips views
+    jq('#world_editor_select').trigger('change'); // ST loads the book into the editor
 }
 
 async function openNativeAt(name, uid) {
@@ -1009,6 +1010,16 @@ async function deleteBook(name) {
 }
 
 // ---------------------------------------------------------- binding actions
+// Re-renders every surface that shows bindings after an action changes them —
+// including the popup's Settings tab, whose rows are render-time snapshots.
+function refreshPopupBindingUi(name) {
+    renderGallery();
+    if (state.bp?.name === name) {
+        renderPopupHead();
+        if (state.bp.tab === 'settings') renderPopupSettingsPage();
+    }
+}
+
 async function assignPersona(avatarId, name, remove = false) {
     const pu = ctx.powerUserSettings;
     const d = pu.persona_descriptions[avatarId] ??= {
@@ -1020,8 +1031,7 @@ async function assignPersona(avatarId, name, remove = false) {
     if (current === avatarId) pu.persona_description_lorebook = d.lorebook;
     saveSettings();
     toast('success', remove ? 'Unbound from persona.' : 'Bound to persona.');
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    refreshPopupBindingUi(name);
 }
 
 async function assignCharacter(ch, name, kind, remove = false) {
@@ -1045,8 +1055,7 @@ async function assignCharacter(ch, name, kind, remove = false) {
         saveSettings(); // persists: script.js saves world_info_settings from the live object
     }
     toast('success', 'Character lore updated.');
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    refreshPopupBindingUi(name);
 }
 
 async function assignChat(name, remove = false) {
@@ -1055,10 +1064,9 @@ async function assignChat(name, remove = false) {
     if (remove) delete meta?.world_info;
     else meta.world_info = name;
     await ctx.saveMetadata(); // function reads live state internally — safe on the cached ctx
-    noteChatBindings(); // remember (or forget) this chat's link right away
     jq('.chat_lorebook_button').toggleClass('world_set', !remove);
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    noteChatBindings(); // remember (or forget) this chat's link right away
+    refreshPopupBindingUi(name);
 }
 
 async function setGlobalActive(name, active) {
@@ -1067,16 +1075,14 @@ async function setGlobalActive(name, active) {
         ? [...new Set([...cur, name])]
         : cur.filter((x) => x !== name);
     await setGlobalActiveList(next);
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    refreshPopupBindingUi(name);
 }
 
 function setType(name, t) {
     const s = getSettings();
     if (t) s.types[name] = t; else delete s.types[name];
     saveSettings();
-    renderGallery();
-    if (state.bp?.name === name) renderPopupHead();
+    refreshPopupBindingUi(name);
 }
 
 // ---------------------------------------------------------- floating menu
@@ -1146,7 +1152,7 @@ function showMenu(items, anchor) {
         if (!it.disabled) row.addEventListener('click', () => { closeMenu(); it.action?.(row); });
         menu.appendChild(row);
     }
-    const host = menuHost();
+    const host = menuHost(anchor);
     host.appendChild(menu);
     wigMenu = menu;
 
@@ -1160,23 +1166,43 @@ function showMenu(items, anchor) {
         y = (r.bottom ?? 0) + 4;
         if (y + mh > window.innerHeight - 8) y = Math.max(8, (r.top ?? 0) - mh - 4);
     } else {
-        // Host is an open <dialog>. Theme skins (Moonlit Echoes etc.) apply
-        // transform / backdrop-filter / zoom to .popup, which makes
-        // position:fixed resolve against the dialog's box instead of the
-        // viewport — viewport coords then land far off-target. Anchor
-        // absolutely to the dialog's on-screen box instead: the rect math is
-        // transform-proof because getBoundingClientRect() is post-transform.
+        // Host is an open <dialog> or the World Info panel. Theme skins
+        // (Moonlit Echoes) and PTMT transform their containers, which makes
+        // position:fixed resolve against the host's box instead of the
+        // viewport — so anchor absolutely to the host's on-screen box. The
+        // rect math is transform-proof (getBoundingClientRect() is
+        // post-transform) and stays correct under scrolling, since the host
+        // and the anchor move together.
         menu.style.position = 'absolute';
         const hr = host.getBoundingClientRect();
         const pad = 8;
-        x = (r.left ?? hr.left) - hr.left;
-        y = (r.bottom ?? 0) - hr.top + 4;
-        const maxX = hr.width - mw - pad;
-        const maxY = hr.height - mh - pad;
-        if (x > maxX) x = Math.max(pad, maxX);
-        if (x < pad) x = pad;
-        if (y + mh > hr.height - pad && maxY >= pad) y = Math.max(pad, (r.top ?? 0) - hr.top - mh - 4);
-        if (y < pad) y = pad;
+        // Visible region: the host's box clipped by its first scrolling
+        // ancestor (the drawer content scrolls on desktop) and by the
+        // viewport — keeps the menu on screen when the host is taller than
+        // the visible panel.
+        let vl = hr.left, vt = hr.top, vr = hr.right, vb = hr.bottom;
+        for (let p = host.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+            if (['auto', 'scroll'].includes(getComputedStyle(p).overflowY)) {
+                const pr = p.getBoundingClientRect();
+                vl = Math.max(vl, pr.left); vt = Math.max(vt, pr.top);
+                vr = Math.min(vr, pr.right); vb = Math.min(vb, pr.bottom);
+                break;
+            }
+        }
+        vl = Math.max(vl, 0); vt = Math.max(vt, 0);
+        vr = Math.min(vr, window.innerWidth); vb = Math.min(vb, window.innerHeight);
+        // Desired viewport position, clamped into the visible region
+        let vx = r.left ?? hr.left;
+        let vy = (r.bottom ?? 0) + 4;
+        if (vy + mh > vb - pad) vy = Math.max(vt + pad, (r.top ?? 0) - mh - 4);
+        vx = Math.max(vl + pad, Math.min(vx, vr - mw - pad));
+        if (vy < vt + pad) vy = vt + pad;
+        // Viewport → host coordinates. When the host itself scrolls (mobile
+        // layouts give #world_popup overflow-y: auto), absolute children
+        // position in the scrolled content space.
+        const hostScrolls = ['auto', 'scroll'].includes(getComputedStyle(host).overflowY);
+        x = vx - hr.left + (hostScrolls ? host.scrollLeft : 0);
+        y = vy - hr.top + (hostScrolls ? host.scrollTop : 0);
     }
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
@@ -1185,12 +1211,25 @@ function showMenu(items, anchor) {
     setTimeout(() => document.addEventListener('pointerdown', onOutsideMenu, { capture: true, once: true }), 0);
 }
 
-function menuHost() {
+function menuHost(anchor) {
     // Mirrors ST's getTopmostModalLayer(): popups are native <dialog> elements
     // in the browser's top layer, so nothing appended to <body> can render
     // above one. When a dialog is open, mount the menu inside it.
     const dialogs = $$('dialog[open]:not([closing])');
-    return dialogs.length ? dialogs[dialogs.length - 1] : document.body;
+    if (dialogs.length) return dialogs[dialogs.length - 1];
+    // Menus anchored inside the World Info panel mount INSIDE it. ST closes
+    // drawers on clicks "outside" them, and the check is DOM containment
+    // against a whitelist of selectors — '#world_popup' is one of them
+    // (script.js ~12105, alongside '.popup' and '.ui-widget'). A <body>-
+    // mounted menu matches nothing on that list however it's painted, so
+    // every click on it dismissed the WI drawer behind it (invisible under
+    // PTMT, whose tabs never auto-close). Inside #world_popup, the menu is
+    // part of the panel and the drawer stays open.
+    if (anchor instanceof Element) {
+        const wp = document.getElementById('world_popup');
+        if (wp?.contains(anchor)) return wp;
+    }
+    return document.body;
 }
 
 // ---------------------------------------------------------- card menus
@@ -3005,7 +3044,7 @@ function renderPopupSettingsPage() {
             'Manage…', (e) => menuAssignCharacter(name, e.currentTarget)),
         row('fa-comments',
             chatLive ? 'Bound to the current chat' : (chatN ? `Chat-linked in ${chatN} other chat${chatN === 1 ? '' : 's'}` : 'Not bound to any chat'),
-            chatLive ? 'Unlink' : 'Link', () => assignChat(name, !chatLive)),
+            chatLive ? 'Unlink' : 'Link', () => assignChat(name, chatLive)),
     );
 
     // Manual label
@@ -3238,7 +3277,15 @@ function wireGlobalListeners() {
         if (jq('#WorldInfo').is(':visible') && state.view !== 'gallery') setView('gallery');
     });
 
-    jq('#world_editor_select').on('change', async () => {
+    jq('#world_editor_select').on('change', async (e) => {
+        // React only to REAL user interaction with the selector. ST fires
+        // synthetic change events on it during normal operation —
+        // setWorldInfoSettings on init, reloadEditor after programmatic
+        // book/entry updates, and the editor refresh that follows a chat
+        // lorebook binding save. Treating those as user selections hijacked
+        // the gallery into the native editor view ("the UI closed").
+        // jQuery-synthesized events carry no originalEvent; user events do.
+        if (!e.originalEvent) return;
         await sleep(0);
         const v = jq('#world_editor_select').val();
         const hasBook = v !== '' && v !== null && v !== undefined;
