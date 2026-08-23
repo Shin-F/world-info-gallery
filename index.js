@@ -173,6 +173,9 @@ const state = {
 
 let renderSeq = 0;
 const bookCache = new Map();
+let cacheEpoch = 0;        // bumped on every cache invalidation; part of the render signature
+let lastGallerySig = null; // last fully-rendered gallery signature (no-op render guard)
+let lastGalleryUi = '';    // last [filter, search, sort] — gates scroll preservation
 
 // ---------------------------------------------------------- helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -183,6 +186,15 @@ const fmtTokens = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
 const estTokensFromLength = (len) => Math.ceil(len / 3.35); // ST's own guesstimate formula
 const estTokens = (text) => estTokensFromLength(String(text ?? '').length);
 const tokenLabel = (n, estimated) => `${estimated ? '~' : ''}${fmtTokens(n ?? 0)}`;
+
+// Nearest ancestor of el that actually scrolls (the WI drawer content on desktop)
+function scrollParentOf(el) {
+    for (let p = el?.parentElement; p && p !== document.body; p = p.parentElement) {
+        const st = getComputedStyle(p);
+        if (['auto', 'scroll', 'overlay'].includes(st.overflowY) && p.scrollHeight > p.clientHeight) return p;
+    }
+    return null;
+}
 
 // Tokenizer identity: counts differ per tokenizer, so cached counts are keyed
 // to (API, tokenizer setting, model). Any change forces a recount on next use.
@@ -468,7 +480,10 @@ function isCurrentlyActive(name, bindings) {
 const manualType = (name) => getSettings().types[name] ?? null;
 
 // ---------------------------------------------------------- book info cache
-function invalidateBooks(name) { name ? bookCache.delete(name) : bookCache.clear(); }
+function invalidateBooks(name) {
+    cacheEpoch++; // any invalidation also invalidates the gallery render signature
+    if (name) bookCache.delete(name); else bookCache.clear();
+}
 
 async function getBookInfo(name) {
     const hit = bookCache.get(name);
@@ -1444,6 +1459,31 @@ async function renderGallery() {
     if (seq !== renderSeq) return;
     state.lastNames = names;
 
+    // ---- No-op guard: rebuild the DOM only when something visible changed.
+    // The gallery used to rebuild on EVERY trigger — including the frequent
+    // SETTINGS_UPDATED events some extensions emit — destroying and
+    // recreating every card under the cursor: hover transitions restarted
+    // ("pulsing" highlights), lazy cover images were re-created, and async
+    // token labels flipped widths, destabilizing scroll.
+    const s = getSettings();
+    const sigParts = names.map((n) => {
+        const b = computeBindings(n);
+        const st = tokenCounts.get(n);
+        return [n, [...b].sort().join(','), s.covers[n] ?? '', manualType(n) ?? '',
+            isCurrentlyActive(n, b) ? 1 : 0, rememberedChatLinks(n).length,
+            st?.done ? st.total : '?'].join('\u0001');
+    });
+    const sig = [state.filter, state.search, state.sort, cacheEpoch,
+        s.showTokens ? 1 : 0, s.deriveCovers ? 1 : 0, s.placeholderCover,
+        sigParts.join('\u0002')].join('\u0000');
+    const uiKey = [state.filter, state.search, state.sort].join('\u0000');
+    if (sig === lastGallerySig && grid.childElementCount) return;
+
+    // Preserve scroll across data-driven refreshes; a fresh search/filter/
+    // sort should land at the top as usual.
+    const scroller = scrollParentOf(grid);
+    const keepScroll = (scroller && uiKey === lastGalleryUi) ? scroller.scrollTop : null;
+
     const cards = [];
     for (const name of names) {
         const bindings = computeBindings(name);
@@ -1479,6 +1519,9 @@ async function renderGallery() {
 
     renderChips(cards);
     grid.replaceChildren(...list.map(buildCard), buildNewCard());
+    if (keepScroll !== null && scroller) scroller.scrollTop = keepScroll;
+    lastGallerySig = sig;
+    lastGalleryUi = uiKey;
     const count = document.getElementById('wig-count');
     countGalleryTokens(names); // fire-and-forget real-token pass
     if (count) count.textContent = `${list.length} / ${cards.length}`;
@@ -3331,6 +3374,7 @@ async function applyFolderFilter() {
 // ---------------------------------------------------------- rename migration
 async function migrateRenames(names) {
     const s = getSettings();
+    if (!names.length) return; // a transient empty book list must not look like "every book was deleted"
     const added = names.filter((n) => !state.lastNames.includes(n));
     const removed = state.lastNames.filter((n) => !names.includes(n));
     let dirty = false;
@@ -3365,7 +3409,10 @@ const onBooksChanged = debounce(async () => {
     const names = (await ctx.getWorldInfoNames()) ?? [];
     await migrateRenames(names);
     state.lastNames = names;
-    invalidateBooks();
+    // No blanket cache invalidation here: unrelated events (the constant
+    // SETTINGS_UPDATED some extensions emit among them) used to wipe the
+    // book cache and re-fetch every lorebook from the server each time.
+    // Book-content changes arrive via WORLDINFO_UPDATED, which invalidates.
     if (state.view === 'gallery') renderGallery();
     else { refreshFolderBar(); applyFolderFilter(); }
     if (state.bp) {
@@ -3383,48 +3430,68 @@ function onEv(name, fn) {
     if (type) ctx.eventSource.on(type, fn);
 }
 
-function wireGlobalListeners() {
-    jq('#WorldInfoToggle').on('click', async () => {
-        if (!getSettings().galleryDefault) return;
-        await sleep(150);
-        if (jq('#WorldInfo').is(':visible') && state.view !== 'gallery') setView('gallery');
-    });
+// ---------------------------------------------------------- WI drawer watching
+// Reopening the World Info panel should return to the gallery (when it's the
+// default view). The old implementation bound a click handler to
+// '#WorldInfoToggle' — but current ST opens the panel via the top-bar icon
+// '#WIDrawerIcon' (the UI perf refactor reworked the toggle flow), so the
+// handler bound to nothing (jQuery .on() on an empty set is a silent no-op)
+// and reopening kept whatever view was last active. Watch the drawer itself
+// instead: open/close state is class-managed on the drawer wrapper
+// ('.openDrawer' / '.closedDrawer'), so a MutationObserver catches every
+// open path — top-bar icon, inline handle, programmatic, extension-driven.
+function wiDrawerState() {
+    const content = document.getElementById('WorldInfo');
+    const wrap = content?.closest('.drawer') ?? content?.parentElement ?? null;
+    const isOpen = () => {
+        if (wrap?.classList.contains('openDrawer') || wrap?.classList.contains('closedDrawer')) {
+            return wrap.classList.contains('openDrawer'); // class-managed state (current ST)
+        }
+        return jq(content).is(':visible'); // display-based state (older builds)
+    };
+    return { content, wrap, isOpen };
+}
 
-    jq('#world_editor_select').on('change', async (e) => {
-        // React only to REAL user interaction with the selector. ST fires
-        // synthetic change events on it during normal operation —
-        // setWorldInfoSettings on init, reloadEditor after programmatic
-        // book/entry updates, and the editor refresh that follows a chat
-        // lorebook binding save. Treating those as user selections hijacked
-        // the gallery into the native editor view ("the UI closed").
-        // jQuery-synthesized events carry no originalEvent; user events do.
-        if (!e.originalEvent) return;
-        await sleep(0);
-        const v = jq('#world_editor_select').val();
-        const hasBook = v !== '' && v !== null && v !== undefined;
-        if (hasBook && state.view !== 'editor') setView('editor');
-        else if (!hasBook && state.view !== 'gallery') setView('gallery');
-        else { refreshFolderBar(); applyFolderFilter(); }
-    });
+// Runs on every hidden → visible transition of the WI drawer.
+function onDrawerOpened() {
+    // ST's WI perf refactor destroys the expandable editor ~1s after the
+    // drawer hides and rebuilds it on reopen — our folder bar, entries-list
+    // listeners, and (worst case) gallery can go with it. Restore anything
+    // missing before applying the default view.
+    if (!document.getElementById('wig-editor-bar')) injectHeaderButtons();
+    if (!document.getElementById('wig-gallery')) { injectGallery(); lastGallerySig = null; }
+    if (!document.getElementById('wig-folder-bar')) injectFolderBar();
+    wireEntriesList();
+    if (getSettings().galleryDefault && state.view !== 'gallery') setView('gallery');
+}
 
-    onEv('WORLDINFO_UPDATED', onBooksChanged);
-    onEv('WORLDINFO_SETTINGS_UPDATED', onBooksChanged);
-    onEv('SETTINGS_UPDATED', onBooksChanged);
-    onEv('CHAT_CHANGED', onBooksChanged);
-    onEv('PERSONA_UPDATED', onBooksChanged);
-    onEv('PERSONA_CHANGED', onBooksChanged);
-    onEv('PERSONA_DELETED', onBooksChanged);
-    onEv('CHARACTER_EDITED', onBooksChanged);
-    onEv('CHARACTER_LOADED', onBooksChanged);
-    // Tokenizer/model changes invalidate token counts (keyed by tokenizerKey)
-    onEv('MAIN_API_CHANGED', onBooksChanged);
-    onEv('PRESET_CHANGED', onBooksChanged);
+function wireDrawerWatcher() {
+    const { content, wrap, isOpen } = wiDrawerState();
+    if (!content) { console.warn(`[${MODULE_NAME}] WI drawer not found — reopen handling disabled.`); return; }
+    let open = isOpen();
+    const checkNow = () => {
+        const nowOpen = isOpen();
+        if (nowOpen && !open) onDrawerOpened();
+        open = nowOpen;
+    };
+    const check = debounce(checkNow, 150);
+    const mo = new MutationObserver(check);
+    for (const t of [wrap, content]) if (t) mo.observe(t, { attributes: true, attributeFilter: ['class', 'style'] });
+    // Click fallback for open paths the observer might miss (unusual markup)
+    jq('#WIDrawerIcon, #WorldInfoToggle').on('click', () => setTimeout(checkNow, 250));
+}
 
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && state.selectMode) enterSelectMode(false);
-    });
-
-    jq('#world_popup_entries_list')
+// The native entries list can be destroyed and rebuilt by ST while the
+// drawer is closed; listeners bound to the old element die with it.
+// Idempotent — rebinds only when the element is new.
+let wiredEntriesListEl = null;
+let entriesListObserver = null;
+function wireEntriesList() {
+    const list = document.getElementById('world_popup_entries_list');
+    if (!list || wiredEntriesListEl === list) return;
+    wiredEntriesListEl = list;
+    jq(list)
+        .off('click.wig contextmenu.wig')
         .on('click.wig', (e) => {
             if (!state.selectMode) return;
             const entry = e.target.closest('.world_entry');
@@ -3444,6 +3511,53 @@ function wireGlobalListeners() {
             e.stopPropagation();
             folderPickerNative(currentBookName(), [Number(entry.getAttribute('uid'))]);
         });
+    entriesListObserver?.disconnect();
+    entriesListObserver = new MutationObserver(debounce(() => {
+        if (state.view === 'editor') applyFolderFilter();
+    }, 150));
+    entriesListObserver.observe(list, { childList: true, subtree: true });
+}
+
+function wireGlobalListeners() {
+
+
+    jq('#world_editor_select').on('change', async (e) => {
+        // React only to REAL user interaction with the selector. ST fires
+        // synthetic change events on it during normal operation —
+        // setWorldInfoSettings on init, reloadEditor after programmatic
+        // book/entry updates, and the editor refresh that follows a chat
+        // lorebook binding save. Treating those as user selections hijacked
+        // the gallery into the native editor view ("the UI closed").
+        // jQuery-synthesized events carry no originalEvent; user events do.
+        if (!e.originalEvent) return;
+        await sleep(0);
+        const v = jq('#world_editor_select').val();
+        const hasBook = v !== '' && v !== null && v !== undefined;
+        if (hasBook && state.view !== 'editor') setView('editor');
+        else if (!hasBook && state.view !== 'gallery') setView('gallery');
+        else { refreshFolderBar(); applyFolderFilter(); }
+    });
+
+    // Book contents changed (ours or the native editor's) → drop cached info.
+    onEv('WORLDINFO_UPDATED', () => invalidateBooks());
+    onEv('WORLDINFO_UPDATED', onBooksChanged);
+    onEv('WORLDINFO_SETTINGS_UPDATED', onBooksChanged);
+    onEv('SETTINGS_UPDATED', onBooksChanged);
+    onEv('CHAT_CHANGED', onBooksChanged);
+    onEv('PERSONA_UPDATED', onBooksChanged);
+    onEv('PERSONA_CHANGED', onBooksChanged);
+    onEv('PERSONA_DELETED', onBooksChanged);
+    onEv('CHARACTER_EDITED', onBooksChanged);
+    onEv('CHARACTER_LOADED', onBooksChanged);
+    // Tokenizer/model changes invalidate token counts (keyed by tokenizerKey)
+    onEv('MAIN_API_CHANGED', onBooksChanged);
+    onEv('PRESET_CHANGED', onBooksChanged);
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && state.selectMode) enterSelectMode(false);
+    });
+
+    wireEntriesList();
 
     const list = document.getElementById('world_popup_entries_list');
     if (list) {
@@ -3595,6 +3709,7 @@ async function init() {
     injectGallery();
     injectFolderBar();
     wireGlobalListeners();
+    wireDrawerWatcher();
     state.lastNames = (await ctx.getWorldInfoNames()) ?? [];
     cfSupportsArrayModel(); // settle character-filter capability before first editor opens
     loadTags();             // prewarm the tags registry
