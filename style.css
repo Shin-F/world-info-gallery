@@ -8,7 +8,7 @@
    Version-proof, and !important + double-ID specificity beats theme/inline
    display overrides. The Global World Info settings live outside
    #world_popup and stay visible. */
-#world_popup.wig-gallery-open > :not(#wig-editor-bar):not(#wig-gallery):not(.wig-menu) { display: none; }
+#world_popup.wig-gallery-open > :not(#wig-gallery):not(.wig-menu) { display: none; }
 .wig-hidden { display: none !important; }
 
 /* Slim top bar for editor view (carries the back arrow) */
@@ -489,3 +489,7 @@
    dismissed the drawer). The panel becomes the menu's positioning context. */
 #world_popup { position: relative; }
 .wig-menu { z-index: 10000; } /* defensive no-op if already set */
+/* Gallery mode never shows the editor's back bar. The child-hiding rule
+   above covers this, but keep an explicit guard so a future selector edit
+   can't regress it silently. */
+#world_popup.wig-gallery-open > #wig-editor-bar { display: none; }
