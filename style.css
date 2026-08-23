@@ -468,3 +468,17 @@
 
 .wig-settings-row { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
 .wig-settings-row span { font-size: 0.9em; }
+
+/* In-menu filter box (character / persona pickers) */
+.wig-menu-search {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 2px 0 4px;
+    padding: 4px 8px;
+    font-size: 0.9em;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--SmartThemeBlurTintColor);
+}
