@@ -1872,9 +1872,22 @@ async function renderPopupEntriesPage() {
     // reload on every data-driven rerender. Search/sort reuse currentEntries.
     let currentEntries = Object.values(initial.entries);
     const renderList = () => renderEntryList(list, book, currentEntries);
-    bp.rerender = async () => {
+    let lastPopupSig = null; // signature of the last rendered entry set
+    bp.rerender = async (force = false) => {
         const fresh = await ctx.loadWorldInfo(book);
         currentEntries = Object.values(fresh?.entries ?? {});
+        // Signature over everything the entries list displays. Identical
+        // signature → skip the DOM rebuild entirely (external SETTINGS_UPDATED
+        // bursts used to rebuild the open list — and steal editor focus —
+        // exactly like the gallery used to twitch). Any displayed change,
+        // including entry deletions, alters the signature and rebuilds.
+        const sig = currentEntries.map((x) => [
+            x.uid, x.disable ? 1 : 0, (x.comment ?? '').length, (x.content ?? '').length,
+            (x.key ?? []).length, x.constant ? 1 : 0, x.vectorized ? 1 : 0,
+            x.position ?? 0, x.order ?? 0, folderOf(x) ?? '',
+        ].join('\u0001')).join('\u0002');
+        if (!force && sig === lastPopupSig) { schedulePopupTokens(book, currentEntries); return; }
+        lastPopupSig = sig;
         // Prune drafts whose entries were deleted elsewhere (avoids phantom
         // guard warnings for entries that no longer exist)
         const live = new Set(currentEntries.map((x) => x.uid));
