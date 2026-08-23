@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-08-XX
+### Added
+- Move or copy entries to another lorebook: "Send to another book…" in an entry's menu (book popup) opens a searchable picker of every other book, then offers Move or Copy. Also available in bulk — in the native editor view, select multiple entries and use "Move entries" → "Send to another book…". Semantics match the native transfer (fields preserved verbatim, fresh UID in the target, appended at the end), and folder groupings travel with the entry, materializing in the target book if needed. Lorebook Manager folder maps stay in sync on both sides.
+### Fixed
+- The "Move to folder…" submenu opened from an entry's kebab menu appeared at the corner of the screen instead of at the menu (it was anchored to the just-closed menu's row)
+- Gallery "twitching" (pulsing hover highlights, random scroll jumps) on setups where other extensions emit frequent settings events: the gallery rebuilt its entire card grid on every such event. It now re-renders only when something visible actually changed, preserves scroll position across data-driven refreshes, no longer re-fetches every lorebook on unrelated events, and async token counts no longer shift card geometry while filling in
+- Reopening the World Info panel returns to the gallery when it's the default view, regardless of how the panel is opened. The old detection was bound to a drawer-toggle selector that no longer matches anything on current SillyTavern builds, so it silently never ran. The drawer is now watched directly, and the extension's native-editor integrations (folder bar, select mode, right-click move) re-bind if SillyTavern rebuilt the editor while the panel was closed
+
 ## [1.2.2] - 2026-08-23
 ### Fixed
 - Clicking anything in a context menu no longer closes the World Info panel. SillyTavern dismisses drawers on clicks outside them, and the check runs on DOM containment against a whitelist of selectors (`#world_popup`, `.popup`, `.ui-widget`, …) — the extension's menus were mounted at the document level, matching nothing, so every menu click counted as "outside" and dismissed the drawer behind it. Menus anchored inside the panel now mount inside it, making them part of the panel for that check. (Invisible to ProbablyTooManyTabs users, whose tabs never auto-close; most visible when linking several chat lorebooks in a row.)
