@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-08-23
+
+*(This release bundles the previously unpublished 1.1.1 – 1.1.3, which resolve the binding-detection reports from the issue tracker.)*
+
+### Added
+- **"Current" filter chip** — shows only the lorebooks that would inject into the prompt right now: the Global selection, the active persona's book, the current character's primary and additional books, and the current chat's binding
+- Character binding menus pin the current chat's character at the top ("Current: …"), so the most common case is one click away; character and persona menus with long lists get an inline filter box
+### Fixed
+- Chat-bound lorebook covers are now stable: they derive from the character that owns the binding chat, so the image no longer changes when you switch or close chats — including books from past chats after a "Scan all chats" run (group-chat bindings have no single character and keep the placeholder)
+
+## [1.1.3] - 2026-08-23
+
+### Added
+- **Remembered chat links** — chat-linked lorebooks keep their chat badge after you leave the chat. Links are remembered automatically as chats are opened or linked, self-heal when a chat is re-opened without the binding, and migrate with renames
+- **"Scan all chats"** action (Extensions settings) — backfills remembered links from the entire chat history in a single request
+- "Forget chat links" action in the card menu; card tooltips now show how many chats link each book
+### Fixed
+- Chat bindings read live state: lorebooks bound to the current chat are detected out of the box, "Link / Unlink current chat" enables whenever a chat is open, and linking persists properly. (The extension previously cached SillyTavern's context at startup — SillyTavern replaces the chat-metadata object on every chat switch, and chatId/characterId were captured before any chat loaded)
+- Auxiliary character lorebooks and chat-bound lorebooks now derive a character avatar for their cover instead of falling back to the placeholder
+- Token counts re-validate when the API mode changes mid-session (same stale-context cause)
+
+## [1.1.2] - 2026-08-23
+
+### Fixed
+- Toggling Global from the gallery or popup now genuinely activates the book at prompt time and persists across reloads — and no longer displaces previously active books. The write goes exclusively through SillyTavern's official `updateWorldInfoSettings` API; a supplementary UI sync had been firing a synthetic change event on the Active Worlds selector, whose native handler re-derived (and clobbered) the active list from the select2-backed DOM
+
+## [1.1.1] - 2026-08-23
+
+### Fixed
+- Lorebooks already active in Global World Info are detected out of the box (badges and filter counts) — SillyTavern moved World Info settings behind module accessors and removed them from the extension context; all reads and writes now use the live module exports and the official `updateWorldInfoSettings` API
+- Additional (auxiliary) character lorebooks: books attached natively are detected, and "Add as additional lorebook" links correctly
+- Renaming a book now also relinks its Global selection and additional character lorebooks
+### Added
+- Chat-bound lorebooks without a custom cover derive their card image from the current chat's character
+
 ## [1.1.0] - 2026-08-21
 
 ### Added
@@ -63,6 +98,6 @@ Initial public release.
 
 </details>
 
-[Unreleased]: https://github.com/Shin-F/world-info-gallery/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Shin-F/world-info-gallery/compare/v1.0.0...v1.1.0
 [1.1.0]: https://github.com/Shin-F/world-info-gallery/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Shin-F/world-info-gallery/releases/tag/v1.0.0
