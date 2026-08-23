@@ -8,7 +8,7 @@
    Version-proof, and !important + double-ID specificity beats theme/inline
    display overrides. The Global World Info settings live outside
    #world_popup and stay visible. */
-#world_popup.wig-gallery-open > *:not(#wig-gallery) { display: none !important; }
+#world_popup.wig-gallery-open > :not(#wig-editor-bar):not(#wig-gallery):not(.wig-menu) { display: none; }
 .wig-hidden { display: none !important; }
 
 /* Slim top bar for editor view (carries the back arrow) */
@@ -482,3 +482,10 @@
     z-index: 1;
     background: var(--SmartThemeBlurTintColor);
 }
+
+/* Context menus now mount inside the WI panel (ST's close-drawer-on-
+   outside-click check is DOM containment against a whitelist that includes
+   #world_popup; a body-mounted menu matched nothing, so every menu click
+   dismissed the drawer). The panel becomes the menu's positioning context. */
+#world_popup { position: relative; }
+.wig-menu { z-index: 10000; } /* defensive no-op if already set */
