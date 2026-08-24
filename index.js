@@ -488,13 +488,14 @@ function invalidateBooks(name) {
 async function getBookInfo(name) {
     const hit = bookCache.get(name);
     if (hit) return hit;
-    const info = { count: 0, chars: 0, folders: new Map() };
+    const info = { count: 0, chars: 0, folders: new Map(), uidFolder: new Map() };
     try {
         const data = await ctx.loadWorldInfo(name);
         for (const e of Object.values(data?.entries ?? {})) {
             info.count++;
             info.chars += String(e.content ?? '').length;
             const f = folderOf(e);
+            info.uidFolder.set(e.uid, f);
             if (f) info.folders.set(f, (info.folders.get(f) ?? 0) + 1);
         }
     } catch { /* unreadable book */ }
@@ -1835,6 +1836,7 @@ async function renderPopupEntriesPage() {
     const page = bp ? $('.wig-bp-page-entries', bp.dlg?.content ?? document) : null;
     if (!bp || !page) return;
     const book = bp.name;
+    bp.lastSig = null; // fresh page must render at least once (rename-safe)
     const initial = await ctx.loadWorldInfo(book);
     if (!initial?.entries) { page.textContent = 'Could not load entries.'; return; }
     invalidateBooks(book);
@@ -1873,27 +1875,25 @@ async function renderPopupEntriesPage() {
     let currentEntries = Object.values(initial.entries);
     const renderList = () => renderEntryList(list, book, currentEntries);
     let lastPopupSig = null; // signature of the last rendered entry set
-    bp.rerender = async (force = false) => {
+    bp.rerender = async () => {
         const fresh = await ctx.loadWorldInfo(book);
         currentEntries = Object.values(fresh?.entries ?? {});
-        // Signature over everything the entries list displays. Identical
-        // signature → skip the DOM rebuild entirely (external SETTINGS_UPDATED
-        // bursts used to rebuild the open list — and steal editor focus —
-        // exactly like the gallery used to twitch). Any displayed change,
-        // including entry deletions, alters the signature and rebuilds.
-        const sig = currentEntries.map((x) => [
-            x.uid, x.disable ? 1 : 0, (x.comment ?? '').length, (x.content ?? '').length,
-            (x.key ?? []).length, x.constant ? 1 : 0, x.vectorized ? 1 : 0,
-            x.position ?? 0, x.order ?? 0, folderOf(x) ?? '',
-        ].join('\u0001')).join('\u0002');
-        if (!force && sig === lastPopupSig) { schedulePopupTokens(book, currentEntries); return; }
-        lastPopupSig = sig;
         // Prune drafts whose entries were deleted elsewhere (avoids phantom
         // guard warnings for entries that no longer exist)
         const live = new Set(currentEntries.map((x) => x.uid));
+        let pruned = false;
         for (const uid of [...bp.drafts]) {
-            if (!live.has(uid)) { bp.drafts.delete(uid); bp.stash.delete(uid); }
+            if (!live.has(uid)) { bp.drafts.delete(uid); bp.stash.delete(uid); pruned = true; }
         }
+        // Dirty-check (gallery-style signature guard): skip the DOM rebuild
+        // when nothing visible changed. Unrelated events used to rebuild the
+        // list under the user every time they fired — with an entry editor
+        // open, that reset the textarea's scroll and focus on event-heavy
+        // setups, twice a second.
+        const sig = currentEntries.map((e) =>
+            `${e.uid}:${e.displayIndex ?? 0}:${String(e.comment ?? '').length}:${String(e.content ?? '').length}:${folderOf(e) ?? ''}`).join('\u0001');
+        if (!pruned && sig === bp.lastSig) return; // unchanged — keep the DOM (and open editors) intact
+        bp.lastSig = sig;
         invalidateBooks(book);
         await getBookInfo(book);
         renderPopupHead();
@@ -3368,16 +3368,20 @@ async function applyFolderFilter() {
     const book = currentBookName();
     if (!book) return;
     const active = state.folderFilter[book] ?? '*';
-    let map = new Map();
-    try {
-        const data = await ctx.loadWorldInfo(book);
-        map = new Map(Object.values(data?.entries ?? {}).map((e) => [e.uid, folderOf(e)]));
-    } catch { return; }
+    // Use the cached per-uid folder map when the book cache is warm; only
+    // fetch when it was invalidated (a real book change — WORLDINFO_UPDATED
+    // clears it). This used to load the book from the server on EVERY call,
+    // and it's called on every settings/world-info event in editor view.
+    let map;
+    if (bookCache.has(book)) map = bookCache.get(book).uidFolder;
+    else map = (await getBookInfo(book)).uidFolder;
     for (const el of $$('#world_popup_entries_list .world_entry')) {
         const uid = Number(el.getAttribute('uid'));
         const folder = map.get(uid) ?? null;
-        if (folder !== null) el.dataset.wigFolder = folder;
-        else delete el.dataset.wigFolder;
+        if (el.dataset.wigFolder !== (folder ?? '')) {
+            if (folder !== null) el.dataset.wigFolder = folder;
+            else delete el.dataset.wigFolder;
+        }
         const show = active === '*' || (active === UNSORTED ? folder === null : folder === active);
         if (!show) { el.dataset.wigHidden = '1'; el.style.display = 'none'; }
         else if (el.dataset.wigHidden) { el.style.display = ''; delete el.dataset.wigHidden; }
@@ -3494,11 +3498,38 @@ function wireDrawerWatcher() {
     jq('#WIDrawerIcon, #WorldInfoToggle').on('click', () => setTimeout(checkNow, 250));
 }
 
-// The native entries list can be destroyed and rebuilt by ST while the
-// drawer is closed; listeners bound to the old element die with it.
-// Idempotent — rebinds only when the element is new.
+// The native entries list can be torn down and rebuilt by ST itself (editor
+// reloads), and every rebuild resets the drawer's scroll to the top — long
+// lorebooks become unusable when rebuilds happen often. Mirror the gallery's
+// keepscroll: remember the scroller's position on real scrolls, and restore
+// it whenever a rebuild removes entries — no matter who triggered it. The
+// memory is per-book, so deliberately switching books still starts at top.
 let wiredEntriesListEl = null;
 let entriesListObserver = null;
+let editorScrollEl = null;
+let editorScrollMem = { el: null, top: 0, book: null };
+let pendingScrollRestore = 0;
+const applyFilterDebounced = debounce(() => { if (state.view === 'editor') applyFolderFilter(); }, 150);
+
+function onEditorScroll() {
+    if (state.view !== 'editor' || !editorScrollEl) return;
+    editorScrollMem = { el: editorScrollEl, top: editorScrollEl.scrollTop, book: currentBookName() };
+}
+
+function tryRestoreEditorScroll() {
+    if (!pendingScrollRestore) return;
+    if (Date.now() > pendingScrollRestore) { pendingScrollRestore = 0; return; }
+    const list = document.getElementById('world_popup_entries_list');
+    if (!list?.querySelector('.world_entry')) return; // mid-teardown; the next mutation tick retries
+    pendingScrollRestore = 0;
+    const scroller = scrollParentOf(list);
+    // Same scroller AND same book as the remembered position — otherwise the
+    // rebuild was a deliberate book switch, which should start at the top.
+    if (scroller && scroller === editorScrollMem.el && editorScrollMem.book === currentBookName()) {
+        scroller.scrollTop = editorScrollMem.top;
+    }
+}
+
 function wireEntriesList() {
     const list = document.getElementById('world_popup_entries_list');
     if (!list || wiredEntriesListEl === list) return;
@@ -3524,11 +3555,37 @@ function wireEntriesList() {
             e.stopPropagation();
             folderPickerNative(currentBookName(), [Number(entry.getAttribute('uid'))]);
         });
+    // Scroll memory: bind to whatever ancestor actually scrolls (the drawer
+    // content). No height requirement, so the listener exists before the
+    // book is tall enough to scroll.
+    let scroller = null;
+    for (let p = list.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (['auto', 'scroll', 'overlay'].includes(getComputedStyle(p).overflowY)) { scroller = p; break; }
+    }
+    if (scroller && scroller !== editorScrollEl) {
+        editorScrollEl?.removeEventListener('scroll', onEditorScroll);
+        editorScrollEl = scroller;
+        scroller.addEventListener('scroll', onEditorScroll, { passive: true });
+    }
     entriesListObserver?.disconnect();
-    entriesListObserver = new MutationObserver(debounce(() => {
-        if (state.view === 'editor') applyFolderFilter();
-    }, 150));
-    entriesListObserver.observe(list, { childList: true, subtree: true });
+    entriesListObserver = new MutationObserver((muts) => {
+        if (state.view !== 'editor') return;
+        // ST replaced the list element wholesale (rare) → rebind everything
+        if (document.getElementById('world_popup_entries_list') !== wiredEntriesListEl) {
+            wireEntriesList();
+            pendingScrollRestore = Date.now() + 750;
+            if (!document.getElementById('wig-folder-bar')) injectFolderBar();
+            refreshFolderBar();
+        }
+        const tornDown = muts.some((m) => [...m.removedNodes].some(
+            (n) => n instanceof Element && (n.classList.contains('world_entry') || !!n.querySelector('.world_entry'))));
+        if (tornDown) pendingScrollRestore = Date.now() + 750;
+        if (pendingScrollRestore) tryRestoreEditorScroll();
+        applyFilterDebounced();
+    });
+    // Observe the PARENT (subtree) so the observer survives ST replacing the
+    // list element itself, not just its children.
+    entriesListObserver.observe(list.parentElement ?? list, { childList: true, subtree: true });
 }
 
 function wireGlobalListeners() {
