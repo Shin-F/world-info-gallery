@@ -5,7 +5,13 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.0] - 2026-08-XX
+## [1.3.1] - 2026-08-23
+### Fixed
+- The native editor view no longer loses your scroll position: editor reloads used to reset the panel to the top, making long lorebooks unusable — the position is now remembered and restored across rebuilds (whoever triggered them), while deliberately switching books still starts at the top
+- The book popup no longer rebuilds its entry list on every unrelated event (the same root cause as the earlier gallery twitching): on setups where events fire often, an open entry editor was being replaced under you roughly twice a second, resetting the scroll and cursor of long entries
+- Folder filtering in the native editor view no longer re-downloads the lorebook from the server on every settings/world-info event — it reads the cached folder map and only refetches after a real change
+
+## [1.3.0] - 2026-08-23
 ### Added
 - Move or copy entries to another lorebook: "Send to another book…" in an entry's menu (book popup) opens a searchable picker of every other book, then offers Move or Copy. Also available in bulk — in the native editor view, select multiple entries and use "Move entries" → "Send to another book…". Semantics match the native transfer (fields preserved verbatim, fresh UID in the target, appended at the end), and folder groupings travel with the entry, materializing in the target book if needed. Lorebook Manager folder maps stay in sync on both sides.
 ### Fixed
