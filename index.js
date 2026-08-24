@@ -1536,7 +1536,7 @@ const FALLBACK_ENTRY_TEMPLATE = {
     constant: false, selective: true, selectiveLogic: 0, addMemo: true,
     order: 100, position: 0, disable: false, excludeRecursion: false,
     preventRecursion: false, delayUntilRecursion: false, probability: 100,
-    useProbability: true, depth: 4, group: '', groupOverride: false,
+    useProbability: true, depth: 4, outletName: '', group: '', groupOverride: false,
     groupWeight: 100, scanDepth: null, caseSensitive: null,
     matchWholeWords: null, useGroupScoring: null, automationId: '',
     role: 0, vectorized: false, sticky: 0, cooldown: 0, delay: 0,
@@ -2151,7 +2151,14 @@ function buildEntryRow(book, e) {
     const bits = [];
     if (e.constant) bits.push('⟳ constant');
     if (e.vectorized) bits.push('⌗ vectorized');
-    bits.push(posLabel);
+    if ((e.position ?? 0) === 7) {
+        // Outlet entries: show the macro token to paste — or flag the
+        // unnamed case, since ST skips unnamed outlet entries at generation
+        const on = String(e.outletName ?? '').trim();
+        bits.push(on ? `{{outlet::${on}}}` : 'Outlet ⚠ unnamed');
+    } else {
+        bits.push(posLabel);
+    }
     if (e.key?.length) bits.push(`${e.key.length} key${e.key.length === 1 ? '' : 's'}`);
     meta.textContent = bits.join(' · ');
     if (getSettings().showTokens) {
@@ -2518,10 +2525,53 @@ function buildEntryEditor(book, e) {
     const caseSel = triSelect(e.caseSensitive);
     const wholeSel = triSelect(e.matchWholeWords);
     const scanDepth = numInput(e.scanDepth, { max: 100, placeholder: 'Global' });
+    // Outlet name (ST PR #4523): position-7 entries are never auto-injected —
+    // once ACTIVATED (constant, or keys matched within scan depth),
+	// their content is stored under this name and pulled into the prompt
+    // with the {{outlet::Name}} macro (case-sensitive; entries with an empty
+    // name are skipped at generation with a console warning). Stored as
+    // entry.outletName (internal) / extensions.outlet_name (character-book
+    // spec). Same field the native editor writes, so both stay in sync.
+    const outletName = document.createElement('input');
+    outletName.type = 'text';
+    outletName.value = String(e.outletName ?? '');
+    outletName.placeholder = 'Outlet name';
+    outletName.title = 'Name for the {{outlet::Name}} macro — case-sensitive. The entry still activates normally (constant, or keys matched within scan depth); only activated entries reach the outlet. Entries sharing a name are combined, sorted by insertion order.';
+    const outletListId = `wig-outlet-names-${e.uid}`;
+    outletName.setAttribute('list', outletListId);
+    const outletList = document.createElement('datalist');
+    outletList.id = outletListId;
+    // Autocomplete: outlet names already used by other entries in this book
+    // (the native editor offers the same). Fire-and-forget — fills in when
+    // the (server-cached) book data arrives.
+    ctx.loadWorldInfo(book).then((data) => {
+        const names = new Set();
+        for (const other of Object.values(data?.entries ?? {})) {
+            if (other?.uid === e.uid) continue;
+            const n = other?.position === 7 ? String(other.outletName ?? '').trim() : '';
+            if (n) names.add(n);
+        }
+        outletList.replaceChildren(...[...names].sort((a, b) => a.localeCompare(b)).map((n) => new Option(n, n)));
+    }).catch(() => { /* unreadable book — no suggestions */ });
+
     const secMatch = editorSection('Matching', 'fa-magnifying-glass');
     const matchRow = document.createElement('div');
     matchRow.className = 'wig-bp-editor-row';
-    matchRow.append(fld('Match case', caseSel), fld('Whole words', wholeSel), fld('Scan depth', scanDepth));
+    const scanField = fld('Scan depth', scanDepth);
+    const outletField = fld('Outlet name', outletName);
+    outletField.appendChild(outletList);
+    matchRow.append(fld('Match case', caseSel), fld('Whole words', wholeSel), scanField, outletField);
+    // Native parity (docs: "an additional Outlet Name field becomes
+    // available"): position Outlet ADDS the name field — Scan depth stays
+    // visible and live. Outlet is a destination for ACTIVATED entries, not
+    // an activation bypass: a keyed outlet entry only reaches its outlet
+    // when its keys matched within the entry's scan depth; a constant one
+    // is always collected. Hiding scan depth here would hide a live control.
+    const syncOutlet = () => {
+        outletField.style.display = Number(pos.value) === 7 ? '' : 'none';
+    };
+    pos.addEventListener('change', syncOutlet);
+    syncOutlet();
     secMatch.body.append(matchRow);
 
     // ---- Extra scan sources
@@ -2776,6 +2826,12 @@ function buildEntryEditor(book, e) {
         entry.caseSensitive = triValue(caseSel);
         entry.matchWholeWords = triValue(wholeSel);
         entry.scanDepth = scanDepth.value === '' ? null : Math.max(0, Number(scanDepth.value) || 0);
+        // Outlet name. Trimmed on save: the macro trims its argument but ST
+        // does not trim the stored name, so padded names can never match.
+        entry.outletName = outletName.value.trim();
+        if (Number(pos.value) === 7 && !entry.outletName) {
+            toast('warning', 'Outlet entry has no name — it will be skipped at generation.');
+        }
         for (const { input, field } of sourceChecks) entry[field] = input.checked;
         entry.useProbability = useProb.checked;
         entry.probability = Math.min(100, Math.max(0, Number(prob.value) || 0));
@@ -2829,7 +2885,7 @@ function buildEntryEditor(book, e) {
         [comment, 'comment'], [keys, 'key'], [keys2, 'keysecondary'], [selLogic, 'selectiveLogic'],
         [content, 'content'], [pos, 'position'], [order, 'order'], [depth, 'depth'], [role, 'role'],
         [constant, 'constant'], [vectorized, 'vectorized'],
-        [caseSel, 'caseSensitive'], [wholeSel, 'matchWholeWords'], [scanDepth, 'scanDepth'],
+        [caseSel, 'caseSensitive'], [wholeSel, 'matchWholeWords'], [scanDepth, 'scanDepth'], [outletName, 'outletName'],
         [useProb, 'useProbability'], [prob, 'probability'],
         [group, 'group'], [groupWeight, 'groupWeight'], [scoringSel, 'useGroupScoring'], [groupOverride, 'groupOverride'],
         [sticky, 'sticky'], [cooldown, 'cooldown'], [delay, 'delay'],
