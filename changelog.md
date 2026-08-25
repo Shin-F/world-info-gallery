@@ -5,7 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.2] - 2026-08-23
+## [1.3.3] - 2026-08-25
+### Fixed
+- Noticed a bug where Entry Folders would not render on creation / move / etc. Folder operations in the book popup update immediately again: drag-reordering a folder, moving it via the folder menu, creating a new folder, and Collapse/Expand all change only extension-owned settings — not the lorebook file — and the recently added rebuild guard didn't include those inputs in its signature, so the entry list skipped its own repaint and stale order/layout persisted until the popup was reopened. The signature now covers folder order and collapse state, plus the entry fields the list displays (disabled state, constant/vectorized, position, key counts, outlet name), so externally edited entries refresh correctly too
+
+## [1.3.2] - 2026-08-24
 ### Added
 - Outlet name support in the entry editor: with the position set to *Outlet*, an *Outlet name* field appears alongside the others, as in the native editor — Scan depth stays visible and live, since outlet entries still pass the full activation pipeline (a keyed outlet entry only reaches its outlet once its keys match within its scan depth). Writes go to the same field the native editor uses, so both editors stay in sync; the field autocompletes from outlet names used elsewhere in the book, outlet entries show their `{{outlet::Name}}` token in the entry list (unnamed ones are flagged — SillyTavern skips those at generation), and names are trimmed on save, since padded outlet names can never be matched by the macro.
 
