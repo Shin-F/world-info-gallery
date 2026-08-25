@@ -1886,12 +1886,26 @@ async function renderPopupEntriesPage() {
             if (!live.has(uid)) { bp.drafts.delete(uid); bp.stash.delete(uid); pruned = true; }
         }
         // Dirty-check (gallery-style signature guard): skip the DOM rebuild
-        // when nothing visible changed. Unrelated events used to rebuild the
-        // list under the user every time they fired — with an entry editor
-        // open, that reset the textarea's scroll and focus on event-heavy
-        // setups, twice a second.
-        const sig = currentEntries.map((e) =>
-            `${e.uid}:${e.displayIndex ?? 0}:${String(e.comment ?? '').length}:${String(e.content ?? '').length}:${folderOf(e) ?? ''}`).join('\u0001');
+        // when nothing visible changed. The signature must cover EVERY input
+        // the render displays — the entry fields shown on rows, plus the two
+        // settings-owned inputs (folder order, collapse state) that folder
+        // drag-reorder / menu reorder / new-folder / collapse-all change
+        // WITHOUT touching the book file. The previous version covered entry
+        // data only, so those actions skipped their own repaint and the list
+        // stayed stale until the popup was reopened.
+        const gs = getSettings();
+        const entryPart = currentEntries.map((e) => [
+            e.uid, e.disable ? 1 : 0, e.displayIndex ?? 0,
+            String(e.comment ?? '').length, String(e.content ?? '').length,
+            (e.key ?? []).length, (e.keysecondary ?? []).length,
+            e.constant ? 1 : 0, e.vectorized ? 1 : 0,
+            e.position ?? 0, e.order ?? 0, folderOf(e) ?? '',
+            String(e.outletName ?? ''),
+        ].join('\u0001')).join('\u0002');
+        const folderPart = (gs.folderOrder[book] ?? []).join('\u0001');
+        const collapsePart = Object.entries(gs.collapsedFolders[book] ?? {})
+            .filter(([, v]) => v).map(([k]) => k).sort().join('\u0001');
+        const sig = [entryPart, folderPart, collapsePart].join('\u0003');
         if (!pruned && sig === bp.lastSig) return; // unchanged — keep the DOM (and open editors) intact
         bp.lastSig = sig;
         invalidateBooks(book);
