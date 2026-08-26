@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-08-25
+### Fixed
+- Eliminated a settings-save feedback loop: with a chat open that had a lorebook bound to it, the remembered-chat-links reconciler re-saved SillyTavern's settings on every pass — emitting `SETTINGS_UPDATED` (and POSTing a settings save) every couple of seconds indefinitely, even while idle. Other extensions listening to settings events were visibly affected (e.g. Persona Library's edit window redrawing constantly). The reconcile is now idempotent and saves only when a remembered link actually changes
+
 ## [1.3.3] - 2026-08-25
 ### Fixed
 - Noticed a bug where Entry Folders would not render on creation / move / etc. Folder operations in the book popup update immediately again: drag-reordering a folder, moving it via the folder menu, creating a new folder, and Collapse/Expand all change only extension-owned settings — not the lorebook file — and the recently added rebuild guard didn't include those inputs in its signature, so the entry list skipped its own repaint and stale order/layout persisted until the popup was reopened. The signature now covers folder order and collapse state, plus the entry fields the list displays (disabled state, constant/vectorized, position, key counts, outlet name), so externally edited entries refresh correctly too
