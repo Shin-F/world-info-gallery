@@ -63,12 +63,14 @@ function noteChatBindings() {
     let dirty = false;
     for (const [name, arr] of Object.entries(s.chatBindings)) {
         if (!Array.isArray(arr)) continue;
+        if (!arr.some(sameChat)) continue; // this chat isn't registered under this book — nothing to strip
+        if (name === book) continue;       // correctly registered under the LIVE binding — leave it exactly as-is
+        // Stale: this chat's descriptor sits under a book that is not its
+        // live binding (the chat was rebound, or the entry migrated wrongly).
         const kept = arr.filter((x) => !sameChat(x));
-        if (kept.length !== arr.length) {
-            if (kept.length) s.chatBindings[name] = kept;
-            else delete s.chatBindings[name];
-            dirty = true;
-        }
+        if (kept.length) s.chatBindings[name] = kept;
+        else delete s.chatBindings[name];
+        dirty = true;
     }
     if (book) {
         const arr = s.chatBindings[book] ??= [];
