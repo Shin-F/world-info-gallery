@@ -118,6 +118,7 @@ All API calls go to your own SillyTavern server — the extension makes no exter
 - **[SillyTavern](https://github.com/SillyTavern/SillyTavern)** — the platform this extends
 - **[Character Library](https://github.com/Sillyanonymous/SillyTavern-CharacterLibrary)** — inspiration for the gallery presentation
 - **[Lorebook Manager](https://github.com/subzero5544/lorebook-manager)** — the portable folder format this extension shares
+- Extension created through extensive consultation with GLM 5.3
 
 ## License
 
