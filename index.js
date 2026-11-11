@@ -52,6 +52,77 @@ function chatOwnerKey() {
     return c.characters?.[c.characterId]?.avatar ?? null;
 }
 
+function chatFileKey() {
+    return String(ctxNow().chatId ?? '').replace(/\.jsonl$/, '') || null;
+}
+
+function chatKey() {
+    const owner = chatOwnerKey();
+    const file = chatFileKey();
+    if (!owner || !file) return null;
+    return `${owner}::${file}`;
+}
+
+function auxBooksFor(key) {
+    if (!key) return [];
+    const arr = getSettings().chatAux[key];
+    return Array.isArray(arr) ? arr.slice() : [];
+}
+
+function auxBooksForCurrentChat() {
+    return auxBooksFor(chatKey());
+}
+
+function isAuxForCurrentChat(name) {
+    return auxBooksForCurrentChat().includes(name);
+}
+
+function isAuxAnywhere(name) {
+    for (const arr of Object.values(getSettings().chatAux ?? {})) {
+        if (Array.isArray(arr) && arr.includes(name)) return true;
+    }
+    return false;
+}
+
+// migrate trueGlobals from the live global list the first time the feature runs. 
+function migrateTrueGlobalsIfNeeded() {
+    const s = getSettings();
+    if (s.trueGlobals !== null) return;
+    s.trueGlobals = [...globalActiveList()];
+    saveSettings();
+}
+
+// Desired global list = extension-owned true globals ∪ aux books for the current chat. 
+async function applyChatAuxGlobals() {
+    migrateTrueGlobalsIfNeeded();
+    const s = getSettings();
+    const trueG = Array.isArray(s.trueGlobals) ? s.trueGlobals : [];
+    const aux = auxBooksForCurrentChat();
+    const desired = [...new Set([...trueG, ...aux])];
+    const live = globalActiveList();
+    // Order-insensitive equality — skip the write when already correct.
+    if (desired.length === live.length && desired.every((n) => live.includes(n))) return;
+    await setGlobalActiveList(desired);
+}
+
+async function setChatAux(name, add) {
+    const key = chatKey();
+    if (!key) { toast('warning', 'Open a chat first.'); return; }
+    const s = getSettings();
+    const arr = s.chatAux[key] ??= [];
+    const has = arr.includes(name);
+    if (add && !has) arr.push(name);
+    else if (!add && has) {
+        const next = arr.filter((x) => x !== name);
+        if (next.length) s.chatAux[key] = next;
+        else delete s.chatAux[key];
+    } else return;
+    saveSettings();
+    await applyChatAuxGlobals();
+    refreshPopupBindingUi(name);
+    toast('success', add ? 'Added as chat-aux book.' : 'Removed chat-aux book.');
+}
+
 function noteChatBindings() {
     const c = ctxNow();
     const owner = chatOwnerKey();
@@ -141,6 +212,9 @@ const DEFAULTS = Object.freeze({
     lmImported: {},        // worldName -> true (auto Lorebook Manager import done)
     chatBindings: {},      // worldName -> [{ o: ownerKey, f: chatFile }] remembered chat links
     lastChatScan: 0,       // timestamp of the last "Scan all chats" run
+    // Chat-aux lorebooks: extra books promoted into the global active list only while their chat is open. trueGlobals is extension-owned;    
+    trueGlobals: null,     // string[] | null - null indicates migration not done
+    chatAux: {},           // chatKey -> string[] of book names
 });
 
 const FILTERS = [
@@ -442,7 +516,11 @@ function extraCharsFor(name) {
 
 function computeBindings(name) {
     const out = new Set();
-    if (globalActiveList().includes(name)) out.add('global');
+    const trueG = getSettings().trueGlobals;
+    // Prefer the extension-owned true-global set once migrated; fall back to the live list only before migration so badges still work on first paint.
+    if (Array.isArray(trueG) ? trueG.includes(name) : globalActiveList().includes(name)) {
+        out.add('global');
+    }
     const pu = ctx.powerUserSettings ?? {};
     for (const d of Object.values(pu.persona_descriptions ?? {})) {
         if (d?.lorebook === name) { out.add('persona'); break; }
@@ -451,11 +529,11 @@ function computeBindings(name) {
         if (ch?.data?.extensions?.world === name) { out.add('character'); break; }
     }
     if (!out.has('character') && extraCharsFor(name).length) out.add('character');
-    if (ctx.chatMetadata?.world_info === name) out.add('chat'); // current chat only
-    // Chat binding: live (current chat) OR remembered from any other chat
+    // Native chat slot (live or remembered)
     if (ctxNow().chatMetadata?.world_info === name || rememberedChatLinks(name).length) out.add('chat');
+    // Extension chat-aux books get a distinct badge
+    if (isAuxAnywhere(name)) out.add('chat+');
     return out;
-
 }
 
 // "Currently active" = would inject into the prompt right now: Global
@@ -464,8 +542,10 @@ function computeBindings(name) {
 // the same field ST's own /getpersona-book slash command reads), the current
 // character's primary or additional lorebooks, or the current chat's live
 // binding. Remembered links to OTHER chats don't count (they're not active).
+// Chat-aux books for the CURRENT chat also count (they are in the live global list while the chat is open).
 function isCurrentlyActive(name, bindings) {
     if (bindings?.has('global')) return true;
+    if (isAuxForCurrentChat(name)) return true;
     const c = ctxNow();
     const pu = ctx.powerUserSettings ?? {};
     if (pu.persona_description_lorebook === name) return true;
@@ -600,7 +680,7 @@ function coverFor(name, bindings) {
         if (bindings.has('character')) {
             const primary = primaryCharFor(name);
             if (primary?.avatar) return { url: safeThumb('avatar', primary.avatar) };
-            // Auxiliary-only book: derive from a character that links it
+            // Aux-only book: derive from a character that links it
             const key = extraCharsFor(name)[0];
             const extra = key && (ctx.characters ?? []).find(
                 (c) => String(c.avatar ?? '').replace(/\.[^.]+$/, '') === key);
@@ -757,6 +837,18 @@ async function createWorldFile(name) {
 // flow offers the same). Returns the number of references updated.
 async function relinkWorldReferences(oldName, newName) {
     let touched = 0;
+
+    // Extension-owned true globals + aux maps (source of truth for our apply path)
+    const s = getSettings();
+    if (Array.isArray(s.trueGlobals) && s.trueGlobals.includes(oldName)) {
+        s.trueGlobals = s.trueGlobals.map((v) => (v === oldName ? newName : v));
+        touched++;
+    }
+    for (const [k, arr] of Object.entries(s.chatAux ?? {})) {
+        if (!Array.isArray(arr) || !arr.includes(oldName)) continue;
+        s.chatAux[k] = arr.map((v) => (v === oldName ? newName : v));
+        touched++;
+    }
 
     // Global selection — canonical write via the WI module API
     const curGlobal = globalActiveList();
@@ -1019,10 +1111,18 @@ async function deleteBook(name) {
     delete s.lmImported[name];
     delete state.folderFilter[name];
 	delete s.chatBindings[name];
+    if (Array.isArray(s.trueGlobals)) s.trueGlobals = s.trueGlobals.filter((x) => x !== name);
+    for (const [k, arr] of Object.entries(s.chatAux ?? {})) {
+        if (!Array.isArray(arr) || !arr.includes(name)) continue;
+        const next = arr.filter((x) => x !== name);
+        if (next.length) s.chatAux[k] = next;
+        else delete s.chatAux[k];
+    }
     saveSettings();
     invalidateBooks(name);
     if (state.bp?.name === name) await closeBookPopup(true);
     ctx.updateWorldInfoList?.();
+    await applyChatAuxGlobals();
     await onBooksChanged();
     toast('success', `"${name}" deleted.`);
 }
@@ -1088,11 +1188,18 @@ async function assignChat(name, remove = false) {
 }
 
 async function setGlobalActive(name, active) {
-    const cur = globalActiveList();
-    const next = active
-        ? [...new Set([...cur, name])]
-        : cur.filter((x) => x !== name);
-    await setGlobalActiveList(next);
+    // trueGlobals is the extension-owned source of truth for real globals.
+    // Aux books for the current chat are layered on top by applyChatAuxGlobals.
+    migrateTrueGlobalsIfNeeded();
+    const s = getSettings();
+    const tg = s.trueGlobals ??= [];
+    if (active) {
+        if (!tg.includes(name)) tg.push(name);
+    } else {
+        s.trueGlobals = tg.filter((x) => x !== name);
+    }
+    saveSettings();
+    await applyChatAuxGlobals();
     refreshPopupBindingUi(name);
 }
 
@@ -1265,6 +1372,7 @@ function cardMenu(name, anchor) {
         { icon: 'fa-user-astronaut', label: 'Link to character…', action: () => menuAssignCharacter(name, anchor) },
         { icon: 'fa-comments', label: 'Link to current chat', disabled: !chatOpen(), action: () => assignChat(name) },
         { icon: 'fa-unlink', label: 'Unlink from current chat', disabled: !(chatOpen() && ctxNow().chatMetadata?.world_info === name), action: () => assignChat(name, true) },
+        { icon: 'fa-book-open', label: isAuxForCurrentChat(name) ? 'Remove Chat+ aux' : 'Add as Chat+ aux', disabled: !chatOpen(), action: () => setChatAux(name, !isAuxForCurrentChat(name)) },
         { icon: 'fa-eraser', label: 'Forget chat links', disabled: !rememberedChatLinks(name).length, action: () => forgetChatBindings(name) },
         { icon: 'fa-globe', label: bindings.has('global') ? 'Remove from Global' : 'Add to Global', action: () => setGlobalActive(name, !bindings.has('global')) },
         { icon: 'fa-tag', label: 'Manual type label…', action: () => menuSetType(name, anchor) },
@@ -1374,8 +1482,8 @@ function buildCard(c) {
     badges.className = 'wig-badges';
     for (const b of c.bindings) {
         const s = document.createElement('span');
-        s.className = `wig-badge wig-badge-${b}`;
-        s.textContent = b;
+        s.className = `wig-badge wig-badge-${b === 'chat+' ? 'chat-plus' : b}`;
+        s.textContent = b === 'chat+' ? 'Chat+' : b;
         badges.appendChild(s);
     }
     if (c.manual && !c.bindings.includes(c.manual)) {
@@ -1510,6 +1618,7 @@ async function renderGallery() {
         (state.filter === 'all' ? true :
          state.filter === 'current' ? c.current :
          state.filter === 'unbound' ? (c.bindings.length === 0 && !c.manual) :
+         state.filter === 'chat' ? (c.bindings.includes('chat') || c.bindings.includes('chat+') || c.manual === 'chat') :
          (c.bindings.includes(state.filter) || c.manual === state.filter)));
 
     const sorters = {
@@ -1797,8 +1906,8 @@ function renderPopupHead() {
     badges.className = 'wig-badges wig-bp-badges';
     for (const b of bindings) {
         const s2 = document.createElement('span');
-        s2.className = `wig-badge wig-badge-${b}`;
-        s2.textContent = b;
+        s2.className = `wig-badge wig-badge-${b === 'chat+' ? 'chat-plus' : b}`;
+        s2.textContent = b === 'chat+' ? 'Chat+' : b;
         badges.appendChild(s2);
     }
     if (manual && !bindings.has(manual)) {
@@ -3277,6 +3386,9 @@ function renderPopupSettingsPage() {
     const personaName = findPersonaByBook(name);
     const chatLive = chatOpen() && ctxNow().chatMetadata?.world_info === name;
     const chatN = rememberedChatLinks(name).length;
+    const auxLive = isAuxForCurrentChat(name);
+    const auxN = Object.values(getSettings().chatAux ?? {}).reduce(
+        (n, arr) => n + (Array.isArray(arr) && arr.includes(name) ? 1 : 0), 0);
     secB.append(
         row('fa-globe', bindings.has('global') ? 'Active in Global World Info' : 'Not in Global World Info',
             bindings.has('global') ? 'Remove' : 'Add', () => setGlobalActive(name, !bindings.has('global'))),
@@ -3287,6 +3399,11 @@ function renderPopupSettingsPage() {
         row('fa-comments',
             chatLive ? 'Bound to the current chat' : (chatN ? `Chat-linked in ${chatN} other chat${chatN === 1 ? '' : 's'}` : 'Not bound to any chat'),
             chatLive ? 'Unlink' : 'Link', () => assignChat(name, chatLive)),
+        row('fa-book-open',
+            auxLive ? 'Chat+ aux for the current chat' : (auxN ? `Chat+ aux in ${auxN} chat${auxN === 1 ? '' : 's'}` : 'Not a Chat+ aux book'),
+            !chatOpen() ? 'Open a chat' : (auxLive ? 'Remove Chat+' : 'Add Chat+'),
+            () => { if (chatOpen()) setChatAux(name, !auxLive); },
+            !chatOpen() ? 'disabled' : ''),
     );
 
     // Manual label
@@ -3489,10 +3606,26 @@ async function migrateRenames(names) {
             dirty = true;
         }
         if (state.folderFilter[from] !== undefined) { state.folderFilter[to] = state.folderFilter[from]; delete state.folderFilter[from]; }
+        if (Array.isArray(s.trueGlobals) && s.trueGlobals.includes(from)) {
+            s.trueGlobals = s.trueGlobals.map((x) => (x === from ? to : x));
+            dirty = true;
+        }
+        for (const [k, arr] of Object.entries(s.chatAux ?? {})) {
+            if (!Array.isArray(arr) || !arr.includes(from)) continue;
+            s.chatAux[k] = arr.map((x) => (x === from ? to : x));
+            dirty = true;
+        }
     } else if (removed.length) {
         for (const n of removed) {
             delete s.covers[n]; delete s.types[n]; delete s.folderOrder[n]; delete s.lmImported[n]; delete s.chatBindings[n];
             delete s.collapsedFolders[n]; delete state.folderFilter[n];
+            if (Array.isArray(s.trueGlobals)) s.trueGlobals = s.trueGlobals.filter((x) => x !== n);
+            for (const [k, arr] of Object.entries(s.chatAux ?? {})) {
+                if (!Array.isArray(arr) || !arr.includes(n)) continue;
+                const next = arr.filter((x) => x !== n);
+                if (next.length) s.chatAux[k] = next;
+                else delete s.chatAux[k];
+            }
         }
         dirty = true;
     }
@@ -3502,6 +3635,7 @@ async function migrateRenames(names) {
 // ---------------------------------------------------------- global reactions
 const onBooksChanged = debounce(async () => {
     noteChatBindings(); // reconcile remembered chat links with the live chat
+    await applyChatAuxGlobals(); // recompute trueGlobals ∪ current-chat aux
     const names = (await ctx.getWorldInfoNames()) ?? [];
     await migrateRenames(names);
     state.lastNames = names;
@@ -3864,6 +3998,10 @@ async function init() {
     loadTags();             // prewarm the tags registry
     await loadWiModule();   // live WI settings (charLore / selected_world_info) for badges
     noteChatBindings();     // seed remembered chat links from the restored chat
+    // Chat-aux: migrate trueGlobals once, then force the live global list from
+    // (trueGlobals ∪ current-chat aux). Never seed trueGlobals from a dirty
+    // live list after this point.
+    await applyChatAuxGlobals();
     setView(getSettings().galleryDefault ? 'gallery' : 'editor');
     console.debug(`[${MODULE_NAME}] initialized`);
 }
