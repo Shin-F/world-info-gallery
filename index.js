@@ -1545,8 +1545,6 @@ const FALLBACK_ENTRY_TEMPLATE = {
 };
 
 async function makeNewEntry(data) {
-    const uids = Object.values(data.entries ?? {}).map((e) => Number(e.uid)).filter(Number.isFinite);
-    const nextUid = (uids.length ? Math.max(...uids) : -1) + 1;
     const nextDisplay = (Object.keys(data.entries ?? {}).length);
     let entry = null;
     try {
@@ -1558,9 +1556,16 @@ async function makeNewEntry(data) {
     if (!entry) {
         entry = structuredClone(FALLBACK_ENTRY_TEMPLATE);
     }
-    entry.uid = nextUid;
+    if (!Number.isInteger(entry.uid)) {
+        //Only use this logic if we don't get a valid UID. Otherwise things can break if there were any UID gaps (data.entries idx != uid, colliding entries).
+        const uids = Object.values(data.entries ?? {}).map((e) => Number(e.uid)).filter(Number.isFinite);
+        entry.uid = (uids.length ? Math.max(...uids) : -1) + 1;
+    }
     entry.displayIndex ??= nextDisplay;
     entry.comment = 'New Entry';
+	//My Local preference only
+    //entry.excludeRecursion = true;
+    //entry.preventRecursion = true;
     return entry;
 }
 
@@ -2956,7 +2961,9 @@ async function duplicateEntry(book, uid) {
     const copy = await makeNewEntry(data);
     const clone = structuredClone(src);
     for (const k of Object.keys(copy)) copy[k] = clone[k] ?? copy[k];
-    copy.uid = (Object.values(data.entries).map((e) => Number(e.uid)).reduce((a, b) => Math.max(a, b), -1)) + 1;
+    //See notes in makeNewEntry on how this can go wrong. Now it's handled safely by makeNewEntry()
+    //copy.uid = (Object.values(data.entries).map((e) => Number(e.uid)).reduce((a, b) => Math.max(a, b), -1)) + 1;
+    const copyUid = copy.uid;
     copy.comment = `${entryTitle(src)} (copy)`.slice(0, 100);
     data.entries[copy.uid] = copy;
     await ctx.saveWorldInfo(book, data);
