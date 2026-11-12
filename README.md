@@ -29,6 +29,10 @@ Click any card to open the detail popup:
 - **Lorebook Manager compatible**: existing Lorebook Manager folders import automatically on first open, and folder changes are mirrored back so both extensions agree
 - A folder filter bar is also injected into the native editor
 
+### Auxiliary Chat Lorebooks (by Targren)
+- Assign a Lorebook as an Auxiliary Chat Lorebook. When the Chat it is bound to is opened, that Lorebook will be temporarily added to Global Lorebooks.
+- This allows you to effectively bind as many Lorebooks as you wish to a single Chat. 
+
 ![Folders](screenshots/entryfolders.gif)
 
 ### 🔗 Classification & bindings
