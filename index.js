@@ -3707,6 +3707,11 @@ function onDrawerOpened() {
     if (!document.getElementById('wig-gallery')) { injectGallery(); lastGallerySig = null; }
     if (!document.getElementById('wig-folder-bar')) injectFolderBar();
     wireEntriesList();
+	// Do a check for new books when we open the drawer, to catch new stuff created by other extensions (MemoryBooks, MWT, e.g.) without having to refresh tab
+	void (async () => {
+        try { await ctx.updateWorldInfoList?.(); } catch { /* non-fatal */ }
+        onBooksChanged();
+    })();
     if (getSettings().galleryDefault && state.view !== 'gallery') setView('gallery');
 }
 
