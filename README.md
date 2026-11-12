@@ -120,6 +120,7 @@ All API calls go to your own SillyTavern server — the extension makes no exter
 - **[Lorebook Manager](https://github.com/subzero5544/lorebook-manager)** — the portable folder format this extension shares
 - Extension created through extensive consultation with GLM 5.3
 - Several bug reports + fixes thanks to Targren
+- Chat Auxiliary Lorebooks concepted and incorporated by Targren
 
 ## License
 
