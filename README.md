@@ -29,10 +29,6 @@ Click any card to open the detail popup:
 - **Lorebook Manager compatible**: existing Lorebook Manager folders import automatically on first open, and folder changes are mirrored back so both extensions agree
 - A folder filter bar is also injected into the native editor
 
-### Auxiliary Chat Lorebooks (by Targren)
-- Assign a Lorebook as an Auxiliary Chat Lorebook. When the Chat it is bound to is opened, that Lorebook will be temporarily added to Global Lorebooks.
-- This allows you to effectively bind as many Lorebooks as you wish to a single Chat. 
-
 ![Folders](screenshots/entryfolders.gif)
 
 ### 🔗 Classification & bindings
@@ -48,6 +44,10 @@ Badges are derived from *live* bindings, not just labels:
 - Assign / remove any binding from a card's context menu or the popup's Settings tab — using the same mechanisms SillyTavern itself uses
 - Optional manual labels for unbound books (shown with a dashed ✎ badge)
 - Renaming a book **relinks every binding** that referenced the old name
+
+### Auxiliary Chat Lorebooks (by Targren)
+- Assign a Lorebook as an Auxiliary Chat Lorebook. When the Chat it is bound to is opened, that Lorebook will be temporarily added to Global Lorebooks.
+- This allows you to effectively bind as many Lorebooks as you wish to a single Chat. 
 
 ### ✏️ Full entry editor
 Every field the native editor offers, inline: title, primary/secondary keys with logic, content with a **live token counter**, all 8 insertion positions, order / depth / role, constant & vectorized, matching options (case sensitivity, whole words, scan depth), the six extra scan sources, probability, inclusion groups, timed effects (sticky / cooldown / delay), recursion options, automation ID, and character filters.
