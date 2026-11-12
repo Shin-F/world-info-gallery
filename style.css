@@ -134,6 +134,7 @@
 .wig-badge-persona   { background: hsla(280 60% 45% / 0.85); }
 .wig-badge-character { background: hsla(180 55% 30% / 0.85); }
 .wig-badge-chat      { background: hsla(40 85% 40% / 0.9); color: #1b1b1b; }
+.wig-badge-chat-plus { background: hsla(20 90% 42% / 0.92); color: #1b1b1b; border-style: dashed; }
 .wig-badge-global    { background: hsla(140 55% 30% / 0.85); }
 .wig-badge-manual    { background: transparent; border-style: dashed; }
 
