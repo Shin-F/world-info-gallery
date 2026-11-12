@@ -1783,8 +1783,7 @@ async function openBookPopup(name) {
 	const dlg = new ctx.Popup(root, POPUP_TEXT, '', {
 		okButton: 'Close',
 		cancelButton: false,
-		wide: true,
-		large: true,
+		large: true,                 // 90svh height; width pinned via .wig-bp-host CSS
 		allowVerticalScrolling: false,
 		// Unsaved-changes guard. ST awaits this handler inside complete(),
 		// so we can confirm right here: false keeps the popup open.
@@ -1800,6 +1799,10 @@ async function openBookPopup(name) {
 		},
 	});
     state.bp.dlg = dlg;
+    // Near-fullwidth popup: tag the dialog (it carries .popup and the
+    // *_dialogue_popup size classes) — the .wig-bp-host rule pins the width.
+    // Valid immediately: the Popup constructor appends content before show().
+    root.closest('dialog')?.classList.add('wig-bp-host');
     dlg.show().then(() => { if (state.bp?.dlg === dlg) state.bp = null; });
 
     root.innerHTML = `
@@ -3005,8 +3008,20 @@ function buildEntryEditor(book, e) {
     const del = mkPopupBtn('fa-trash-can', 'Delete', () => deleteEntry(book, e.uid));
     btns.append(save, closeBtn, dup, del);
 
-    ed.append(rowTitle, rowKeys, contentBox, params, flags,
-        secMatch.sec, secScan.sec, secProb.sec, secGroup.sec, secTimed.sec, secMisc.sec, secFilter.sec, btns);
+    // Two-column layout: core fields left, collapsible sections right.
+    // (CSS collapses to a single column on narrow viewports, restoring the
+    // original stacking order.)
+    const cols = document.createElement('div');
+    cols.className = 'wig-bp-editor-cols';
+    const colMain = document.createElement('div');
+    colMain.className = 'wig-bp-col-main';
+    const colSide = document.createElement('div');
+    colSide.className = 'wig-bp-col-side';
+    colMain.append(rowTitle, rowKeys, contentBox, params, flags, btns);
+    colSide.append(secMatch.sec, secScan.sec, secProb.sec, secGroup.sec, secTimed.sec, secMisc.sec, secFilter.sec);
+    cols.append(colMain, colSide);
+    ed.append(cols);
+	
     // Match ST's standard input styling (same background as native editor fields)
     $$('input:not([type="checkbox"]), select, textarea', ed).forEach((el) => el.classList.add('text_pole'));
 	    // ---- Unsaved-changes tracking
