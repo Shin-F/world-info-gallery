@@ -134,6 +134,7 @@
 .wig-badge-persona   { background: hsla(280 60% 45% / 0.85); }
 .wig-badge-character { background: hsla(180 55% 30% / 0.85); }
 .wig-badge-chat      { background: hsla(40 85% 40% / 0.9); color: #1b1b1b; }
+.wig-badge-chat-plus { background: hsla(20 90% 42% / 0.92); color: #1b1b1b; border-style: dashed; }
 .wig-badge-global    { background: hsla(140 55% 30% / 0.85); }
 .wig-badge-manual    { background: transparent; border-style: dashed; }
 
@@ -498,3 +499,36 @@
    Token counts fill in asynchronously ('…' → '1.2k'); pin the span width so
    arriving numbers don't reflow cards mid-scroll. */
 .wig-meta span[data-wig-token] { display: inline-block; min-width: 4.5em; }
+
+/* ---- Book popup: near-fullwidth ----
+   ST's sizing: `wide` couples width to height (1:1 aspect vs 90svh) — the
+   source of the wide fixed side margins — and `large` sets height:90svh +
+   width:fit-content, both !important. We drop `wide`, keep `large` for
+   height, and pin width here. dialog.popup.wig-bp-host (0,2,1) out-ranks
+   the single-class *_dialogue_popup rules (0,1,0) under equal !important.
+   Tune via --wig-popup-max (e.g. 1400px) if near-fullwidth is too much. */
+dialog.popup.wig-bp-host {
+    width: min(var(--wig-popup-max, 96vw), 96vw) !important;
+    max-width: 96vw !important;
+}
+
+/* ---- Entry editor: two columns ----
+   Core fields left; collapsible sections right. Single column under 900px. */
+.wig-bp-editor-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 32%);
+    gap: 10px;
+    align-items: start; /* natural column heights — required for sticky */
+}
+.wig-bp-editor-cols > div { min-width: 0; }
+/* Field rows may wrap in the narrower columns */
+.wig-bp-editor-cols .wig-bp-editor-row { flex-wrap: wrap; row-gap: 6px; }
+/* Sections stay reachable while scrolling long content in the left column.
+   Cosmetic: no-op when the right column is taller; silently inert if theme
+   transforms/overflow break the sticky context — delete this one rule if it
+   ever misbehaves. */
+.wig-bp-col-side { position: sticky; top: 4px; }
+@media (max-width: 900px) {
+    .wig-bp-editor-cols { grid-template-columns: 1fr; }
+    .wig-bp-col-side { position: static; }
+}
