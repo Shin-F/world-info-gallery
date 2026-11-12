@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-25
+### Fixed
+- Fixed a bug that would create ghost entries if an entry was deleted, and then a new one created (fixed by Targren).
+
+### Added
+- A new feature allowing Lorebooks to be bound as Auxiliary Lorebooks to a particular Chat. (Chat+ Aux book). Feature conceived and implemented by Targren. 
+
+### Changed
+- Adjusted the layout of the popup editor to allow it to take advantage of wider screens on desktop. Smaller windows or mobile should look the same, while wider screens should have more real estate in the editor.
+
 ## [1.3.4] - 2026-08-25
 ### Fixed
 - Eliminated a settings-save feedback loop: with a chat open that had a lorebook bound to it, the remembered-chat-links reconciler re-saved SillyTavern's settings on every pass — emitting `SETTINGS_UPDATED` (and POSTing a settings save) every couple of seconds indefinitely, even while idle. Other extensions listening to settings events were visibly affected (e.g. Persona Library's edit window redrawing constantly). The reconcile is now idempotent and saves only when a remembered link actually changes
