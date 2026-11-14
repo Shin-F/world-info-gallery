@@ -1747,6 +1747,36 @@ async function closeBookPopup(force = false) {
     return true;
 }
 
+// Save All lives in the popup's own button row, beside the Close (OK)
+// button — the natural flow is Save All → Close. Placement is layered for
+// robustness: anchor to the OK button itself when findable, then the
+// button row container, then the dialog as a last resort.
+// Source-verified structure (popup.css): the row is .popup-controls
+// (flex, gap 20px, centered); the OK button is .menu_button.popup-button-ok.
+function injectSaveAllButton() {
+    const bp = state.bp;
+    const dialog = bp?.dlg?.content?.closest('dialog');
+    if (!dialog) return;
+    const btn = document.createElement('div');
+    btn.className = 'menu_button wig-save-all';
+    btn.innerHTML = '<i class="fa-solid fa-check-double"></i><span>Save All</span>';
+    btn.title = 'Save every entry with unsaved edits in this lorebook';
+    btn.addEventListener('click', () => {
+        if (state.bp) saveAllDrafts(state.bp.name);
+    });
+    const ok = dialog.querySelector('.popup-button-ok');
+    if (ok) {
+        ok.parentNode.insertBefore(btn, ok); // [Save All] [Close] — the row's 20px gap spaces them
+        return;
+    }
+    const controls = dialog.querySelector('.popup-controls');
+    if (controls) {
+        controls.append(btn); // container found; OK button undetectable (renamed class?) — same row, rightmost
+        return;
+    }
+    dialog.appendChild(btn); // last resort (current visible behavior, kept for safety)
+}
+
 async function openBookPopup(name) {
     const names = await ctx.getWorldInfoNames();
     if (!names.includes(name)) { toast('warning', `Lorebook "${name}" no longer exists.`); return; }
@@ -1803,6 +1833,7 @@ async function openBookPopup(name) {
     // *_dialogue_popup size classes) — the .wig-bp-host rule pins the width.
     // Valid immediately: the Popup constructor appends content before show().
     root.closest('dialog')?.classList.add('wig-bp-host');
+    injectSaveAllButton(); // Save All beside the popup's Close button
     dlg.show().then(() => { if (state.bp?.dlg === dlg) state.bp = null; });
 
     root.innerHTML = `
@@ -2576,6 +2607,97 @@ function mkChipNote(text) {
     return s;
 }
 
+// Applies a harvested draft map ({ field: value }) to a book entry object.
+// Single source of truth for draft→entry serialization, shared by the Save
+// button (harvests the live editor) and Save All (applies stashed drafts).
+// Mirrors the coercions Save has always used.
+function applyDraftToEntry(entry, v) {
+    const num = (x, d = 0) => (Number.isFinite(Number(x)) ? Number(x) : d);
+    entry.comment = String(v.comment ?? '').slice(0, 100); // MAX_COMMENT_LENGTH = 100
+    entry.key = parseKeys(v.key);
+    entry.keysecondary = parseKeys(v.keysecondary);
+    entry.selectiveLogic = num(v.selectiveLogic);
+    entry.content = String(v.content ?? '');
+    entry.position = num(v.position);
+    entry.order = num(v.order);
+    entry.depth = Math.max(0, num(v.depth));
+    entry.role = num(v.role);
+    entry.constant = !!v.constant;
+    entry.vectorized = !!v.vectorized;
+    entry.caseSensitive = v.caseSensitive === '' ? null : v.caseSensitive === '1';
+    entry.matchWholeWords = v.matchWholeWords === '' ? null : v.matchWholeWords === '1';
+    entry.scanDepth = v.scanDepth === '' ? null : Math.max(0, num(v.scanDepth));
+    for (const { field } of SCAN_SOURCES) {
+        const k = 'src_' + field;
+        if (k in v) entry[field] = !!v[k];
+    }
+    entry.useProbability = !!v.useProbability;
+    entry.probability = Math.min(100, Math.max(0, num(v.probability)));
+    entry.group = String(v.group ?? '').trim();
+    entry.groupOverride = !!v.groupOverride;
+    entry.groupWeight = Math.min(100, Math.max(1, num(v.groupWeight) || 100)); // '' → 100 (native default)
+    entry.useGroupScoring = v.useGroupScoring === '' ? null : v.useGroupScoring === '1';
+    entry.sticky = Math.max(0, num(v.sticky));
+    entry.cooldown = Math.max(0, num(v.cooldown));
+    entry.delay = Math.max(0, num(v.delay));
+    entry.preventRecursion = !!v.preventRecursion;
+    entry.excludeRecursion = !!v.excludeRecursion;
+    entry.delayUntilRecursion = !!v.delayUntilRecursion;
+    entry.addMemo = !!v.addMemo;
+    entry.automationId = String(v.automationId ?? '').trim();
+    entry.outletName = String(v.outletName ?? '').trim();
+    // Character filter: the hidden cfInput harvests it as JSON
+    try {
+        const cf = JSON.parse(v.characterFilter || 'null');
+        if (cf && typeof cf === 'object') {
+            const norm = {
+                format: cf.format,
+                characters: new Map(cf.characters ?? []),
+                tags: new Map(cf.tags ?? []),
+                personas: new Map(cf.personas ?? []),
+            };
+            if (norm.characters.size || norm.tags.size || norm.personas.size) {
+                entry.characterFilter = writeCharacterFilter(norm.format ?? (cfApiCache === true ? 'array' : 'object'), norm);
+            } else {
+                delete entry.characterFilter;
+            }
+        }
+    } catch { /* corrupted draft value — leave the filter untouched */ }
+}
+
+// Saves every entry with unsaved edits in one book write. Drafts are
+// stashed continuously as the user types (bp.stash), so this applies them
+// all — including edits sitting in collapsed rows — with a single server
+// save, instead of visiting each editor's Save button.
+async function saveAllDrafts(book) {
+    const bp = state.bp;
+    if (!bp) return;
+    if (!bp.stash?.size) { toast('info', 'No unsaved edits.'); return; }
+    const data = await ctx.loadWorldInfo(book);
+    if (!data?.entries) { toast('error', 'Could not read the lorebook.'); return; }
+    let saved = 0;
+    const unnamedOutlets = [];
+    for (const [uid, v] of bp.stash) {
+        const entry = data.entries[uid];
+        if (!entry) { bp.drafts.delete(uid); bp.stash.delete(uid); continue; } // deleted elsewhere — drop the stale draft
+        applyDraftToEntry(entry, v);
+        if (entry.position === 7 && !entry.outletName) unnamedOutlets.push(uid);
+        saved++;
+    }
+    if (!saved) { toast('info', 'No unsaved edits.'); return; }
+    await ctx.saveWorldInfo(book, data);   // one write for the whole book
+    invalidateBooks(book);
+    bp.drafts.clear();
+    bp.stash.clear();
+    $$('[data-wig-draft]', bp.dlg?.content ?? document).forEach((el) => el.removeAttribute('data-wig-draft'));
+    renderGallery();
+    toast('success', `Saved ${saved} ${saved === 1 ? 'entry' : 'entries'}.`);
+    if (unnamedOutlets.length) {
+        toast('warning', `${unnamedOutlets.length} outlet ${unnamedOutlets.length === 1 ? 'entry has' : 'entries have'} no name — ${unnamedOutlets.length === 1 ? 'it will be' : 'they will be'} skipped at generation.`);
+    }
+    await bp.rerender?.();
+}
+
 function buildEntryEditor(book, e) {
     const ed = document.createElement('div');
     ed.className = 'wig-bp-editor';
@@ -2945,20 +3067,12 @@ function buildEntryEditor(book, e) {
         const data = await ctx.loadWorldInfo(book);
         const entry = data?.entries?.[e.uid];
         if (!entry) { toast('error', 'Entry no longer exists.'); return; }
-        entry.comment = comment.value.slice(0, 100); // MAX_COMMENT_LENGTH = 100
-        entry.key = parseKeys(keys.value);
-        entry.keysecondary = parseKeys(keys2.value);
-        entry.selectiveLogic = Number(selLogic.value) || 0;
-        entry.content = content.value;
-        entry.position = Number(pos.value) || 0;
-        entry.order = Number(order.value) || 0;
-        entry.depth = Math.max(0, Number(depth.value) || 0);
-        entry.role = Number(role.value) || 0;
-        entry.constant = constant.checked;
-        entry.vectorized = vectorized.checked;
-        entry.caseSensitive = triValue(caseSel);
-        entry.matchWholeWords = triValue(wholeSel);
-        entry.scanDepth = scanDepth.value === '' ? null : Math.max(0, Number(scanDepth.value) || 0);
+        applyDraftToEntry(entry, harvestDraft(ed));
+        if (entry.position === 7 && !entry.outletName) {
+            toast('warning', 'Outlet entry has no name — it will be skipped at generation.');
+        }
+        await ctx.saveWorldInfo(book, data);
+        // …rest of the handler unchanged (drafts/stash delete, badge clear, gallery, rerender)
         // Outlet name. Trimmed on save: the macro trims its argument but ST
         // does not trim the stored name, so padded names can never match.
         entry.outletName = outletName.value.trim();
